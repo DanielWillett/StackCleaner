@@ -1098,7 +1098,7 @@ public sealed class Color32Config : ColorConfig
     /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
     public new Color HtmlBackgroundColor
     {
-        get => Color.FromArgb(base.HtmlBackgroundColor - 1);
+        get => Color.FromArgb(base.HtmlBackgroundColor);
         set
         {
             if (Frozen)
