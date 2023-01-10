@@ -20,12 +20,15 @@ public class StackCleanerConfiguration : ICloneable
     private IFormatProvider _locale = CultureInfo.InvariantCulture;
     private ColorConfig _colors = Color4Config.Default;
     private bool _includeSourceData = true;
-    private bool _warnForHiddenLines = true;
     private bool _putSourceDataOnNewLine = true;
     private bool _includeNamespaces = true;
+    private bool _includeLineData = true;
     private bool _useTypeAliases = true;
-    private bool _htmlUseClassNames;
     private bool _htmlWriteOuterDiv = true;
+    private bool _warnForHiddenLines;
+    private bool _htmlUseClassNames;
+    private bool _includeILOffset;
+    private bool _includeFileData;
     private StackColorFormatType _colorFormatting = StackColorFormatType.None;
     private IReadOnlyCollection<Type> _hiddenTypes = StackTraceCleaner.DefaultHiddenTypes;
 
@@ -115,7 +118,7 @@ public class StackCleanerConfiguration : ICloneable
     }
 
     /// <summary>
-    /// Whether or not namespaces will be included in the method declaration.
+    /// Namespaces are included in the method declaration.
     /// </summary>
     /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
     public bool IncludeNamespaces
@@ -126,6 +129,51 @@ public class StackCleanerConfiguration : ICloneable
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
             _includeNamespaces = value;
+        }
+    }
+
+    /// <summary>
+    /// IL offsets are included in the source data.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public bool IncludeILOffset
+    {
+        get => _includeILOffset;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _includeILOffset = value;
+        }
+    }
+
+    /// <summary>
+    /// Line and column numbers are included in the source data.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public bool IncludeLineData
+    {
+        get => _includeLineData;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _includeLineData = value;
+        }
+    }
+
+    /// <summary>
+    /// Relative source file path will be included in the source data.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public bool IncludeFileData
+    {
+        get => _includeFileData;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _includeFileData = value;
         }
     }
 
@@ -197,7 +245,7 @@ public class StackCleanerConfiguration : ICloneable
     }
 
     /// <summary>
-    /// Override hidden types.<br/>
+    /// Override types who's methods will be skipped in stack traces.<br/>
     /// Default values:<br/><br/>
     /// <see cref="ExecutionContext"/><br/>
     /// <see cref="TaskAwaiter"/><br/>
