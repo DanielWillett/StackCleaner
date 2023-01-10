@@ -24,6 +24,8 @@ public class StackTraceCleaner
     private const string RootDirectorySymbol = "~";
     private const char GenericOpenSymbol = '<';
     private const char GenericCloseSymbol = '>';
+    private const char AngleBracketOpeningUnityEscape = '〈';
+    private const char AngleBracketClosingUnityEscape = '〉';
     private const char ParametersOpenSymbol = '(';
     private const char ParametersCloseSymbol = ')';
     private const char MethodBodyOpenSymbol = '{';
@@ -46,7 +48,15 @@ public class StackTraceCleaner
     private const string AsyncSymbol = "async";
     private const string EnumeratorSymbol = "enumerator";
     private const string UnityEndColorSymbol = "</color>";
+    private const string StartSpanTagStyleClassP1 = "<span class=\"";
+    private const string StartSpanTagStyleClassP2 = "\">";
+    private const string OuterStartHtmlTagStyleClass = "<div class=\"" + BackgroundClassName + "\">";
+    private const string OuterStartHtmlTagStyleSymbolP1 = "<div style=\"background-color:#";
+    private const string OuterStartHtmlTagStyleSymbolP2 = ";\">";
+    private const string OuterEndHtmlTagSymbol = "</div>";
     private const string HtmlEndSpanSymbol = "</span>";
+    private const string StartParaTagSymbol = "<p>";
+    private const string EndParaTagSymbol = "</p>";
     private const string GlobalSymbol = "global";
     private const string AtPrefixSymbol = " at ";
     private const string LineNumberPrefixSymbol = "LN #";
@@ -54,6 +64,7 @@ public class StackTraceCleaner
     private const string ILOffsetPrefixSymbol = "IL";
     private const string FilePrefixSymbol = "FILE: ";
     private const string HiddenLineWarning = "Some lines hidden for readability.";
+    public const string BackgroundClassName = "st_bkgr";
     public const string KeywordClassName = "st_keyword";
     public const string MethodClassName = "st_method";
     public const string PropertyClassName = "st_property";
@@ -102,10 +113,17 @@ public class StackTraceCleaner
     private readonly bool _isRgbaColor;
     private readonly bool _appendColor;
     private readonly bool _reqEndColor;
+    private readonly bool _writeNewline;
+    private readonly bool _writeParaTags;
     /// <summary>
     /// Default implementation of <see cref="StackTraceCleaner"/>.
     /// </summary>
     public static StackTraceCleaner Default => _instance ??= new StackTraceCleaner();
+
+    /// <summary>
+    /// This value and all it's properties are <see langword="readonly"/>. Trying to modify them will throw a <see cref="NotSupportedException"/>.
+    /// </summary>
+    public StackCleanerConfiguration Configuration => _config;
 
     /// <summary>
     /// Use <see cref="Default"/> to get a default implementation.
@@ -121,18 +139,21 @@ public class StackTraceCleaner
             is StackColorFormatType.UnityRichText
             or StackColorFormatType.TextMeshProRichText
             or StackColorFormatType.ANSIColor
-            or StackColorFormatType.ExtendedANSIColor;
+            or StackColorFormatType.ExtendedANSIColor
+            or StackColorFormatType.Html;
         _reqEndColor = _appendColor &&
-                       config.ColorFormatting is StackColorFormatType.UnityRichText
-                           or StackColorFormatType.TextMeshProRichText;
+                       config.ColorFormatting is StackColorFormatType.UnityRichText or StackColorFormatType.Html;
+        _writeNewline = config.ColorFormatting != StackColorFormatType.Html;
+        _writeParaTags = config.ColorFormatting == StackColorFormatType.Html;
     }
-    public static StackTrace? GetStackTrace(Exception ex) => ex.StackTrace != null ? new StackTrace(ex, true) : null;
+    public static StackTrace? GetStackTrace(Exception ex, bool fetchSourceInfo = true) => ex.StackTrace != null ? new StackTrace(ex, fetchSourceInfo) : null;
     public string GetString(StackTrace stackTrace)
     {
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
 
         using MemoryStream stream = new MemoryStream(256);
+        stream.Position = 0;
         WriteToStream(stream, stackTrace, Encoding.UTF8);
         byte[] bytes = stream.GetBuffer();
         return Encoding.UTF8.GetString(bytes, 0, (int)stream.Length);
@@ -150,7 +171,7 @@ public class StackTraceCleaner
         using TextWriter writer = new StreamWriter(stream, encoding, 256, true);
         WriteToTextWriterIntl(stackTrace, writer);
     }
-    public Task WriteToStreamAsync(Stream stream, StackTrace stackTrace, Encoding? encoding = null)
+    public Task WriteToStreamAsync(Stream stream, StackTrace stackTrace, Encoding? encoding = null, CancellationToken token = default)
     {
         if (stream == null)
             throw new ArgumentNullException(nameof(stream));
@@ -160,24 +181,33 @@ public class StackTraceCleaner
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
 
         encoding ??= Encoding.UTF8;
-        TextWriter writer = new StreamWriter(stream, encoding, 256, true);
-        return WriteToTextWriterIntlAsync(stackTrace, writer);
+        TextWriter writer = new StreamWriter(stream, encoding, _config.ColorFormatting is StackColorFormatType.None
+            or StackColorFormatType.ConsoleColor ? 256 : (_config.ColorFormatting == StackColorFormatType.ANSIColor ? 384 : 512), true);
+        return WriteToTextWriterIntlAsync(stackTrace, writer, token, true);
     }
-    public void WriteToConsole(StackTrace stackTrace)
+    /// <summary>
+    /// Output the stack trace to <see cref="Console"/> using the appropriate color format.
+    /// </summary>
+    /// <param name="stackTrace">Stack trace to write.</param>
+    /// <param name="writeToConsoleBuffer">Only set this to <see langword="true"/> if memory is a huge concern, writing to the console per span takes significantly (~5x) longer than writing to a memory buffer then writing the entire buffer to the console at once.</param>
+    /// <exception cref="ArgumentNullException"></exception>
+    public void WriteToConsole(StackTrace stackTrace, bool writeToConsoleBuffer = false)
     {
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
 
-        if (_config.ColorFormatting is StackColorFormatType.None or StackColorFormatType.ConsoleColor)
+        if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
         {
-            TokenType currentColor = (TokenType)255;
+            ConsoleColor currentColor = (ConsoleColor)255;
             ConsoleColor old = Console.ForegroundColor;
             foreach (SpanData span in EnumerateSpans(stackTrace))
             {
-                if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space && currentColor != span.Color)
+                if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
-                    Console.ForegroundColor = (ConsoleColor)(GetColor(span.Color) - 1);
-                    currentColor = span.Color;
+                    ConsoleColor old2 = currentColor;
+                    currentColor = _isRgbaColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                    if (old2 != currentColor)
+                        Console.ForegroundColor = currentColor;
                 }
 
                 if (span.Text != null)
@@ -189,7 +219,132 @@ public class StackTraceCleaner
                 Console.ForegroundColor = old;
             Console.WriteLine();
         }
+        else if (!writeToConsoleBuffer) Console.WriteLine(GetString(stackTrace));
         else WriteToTextWriterIntl(stackTrace, Console.Out);
+    }
+    public void WriteToTextWriter(StackTrace stackTrace, TextWriter writer)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (stackTrace == null)
+            throw new ArgumentNullException(nameof(stackTrace));
+
+        WriteToTextWriterIntl(stackTrace, writer);
+    }
+    public Task WriteToTextWriterAsync(StackTrace stackTrace, TextWriter writer, CancellationToken token = default)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (stackTrace == null)
+            throw new ArgumentNullException(nameof(stackTrace));
+
+        return WriteToTextWriterIntlAsync(stackTrace, writer, token, false);
+    }
+    private void WriteToTextWriterIntl(StackTrace trace, TextWriter writer)
+    {
+        TokenType currentColor = (TokenType)255;
+        bool div = false;
+        foreach (SpanData span in EnumerateSpans(trace))
+        {
+            if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
+            {
+                writer.Write(GetDivTag());
+                div = true;
+            }
+            if (currentColor != span.Color)
+            {
+                if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
+                    writer.Write(GetEndTag());
+
+                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                    writer.Write(GetColorString(span.Color));
+                currentColor = span.Color;
+            }
+
+            if (span.Text != null)
+                writer.Write(span.Text);
+            else
+            {
+                char c = span.Char;
+                if (c == '<')
+                {
+                    if (_config.ColorFormatting is StackColorFormatType.UnityRichText or StackColorFormatType.TextMeshProRichText)
+                    {
+                        c = AngleBracketOpeningUnityEscape;
+                    }
+                }
+                else if (c == '>' && _config.ColorFormatting is StackColorFormatType.UnityRichText or StackColorFormatType.TextMeshProRichText)
+                {
+                    c = AngleBracketClosingUnityEscape;
+                }
+                writer.Write(c);
+            }
+        }
+        if ((int)currentColor != 255 && ShouldWriteEnd(currentColor))
+            writer.Write(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol);
+        if (div)
+            writer.Write(OuterEndHtmlTagSymbol);
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+            writer.Write(GetANSIResetString());
+        if (_writeNewline)
+            writer.Write(Environment.NewLine);
+    }
+    private async Task WriteToTextWriterIntlAsync(StackTrace trace, TextWriter writer, CancellationToken token = default, bool dispose = true)
+    {
+        token.ThrowIfCancellationRequested();
+        TokenType currentColor = (TokenType)255;
+        bool div = false;
+        foreach (SpanData span in EnumerateSpans(trace))
+        {
+            if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
+            {
+                writer.Write(GetDivTag());
+                div = true;
+            }
+            if (currentColor != span.Color)
+            {
+                if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
+                    await writer.WriteAsync(GetEndTag()).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+
+                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                    await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                currentColor = span.Color;
+            }
+
+            if (span.Text != null)
+                await writer.WriteAsync(span.Text).ConfigureAwait(false);
+            else
+            {
+                char c = span.Char;
+                if (c == '<')
+                {
+                    if (_config.ColorFormatting is StackColorFormatType.UnityRichText or StackColorFormatType.TextMeshProRichText)
+                    {
+                        c = AngleBracketOpeningUnityEscape;
+                    }
+                }
+                else if (c == '>' && _config.ColorFormatting is StackColorFormatType.UnityRichText or StackColorFormatType.TextMeshProRichText)
+                {
+                    c = AngleBracketClosingUnityEscape;
+                }
+                await writer.WriteAsync(c).ConfigureAwait(false);
+            }
+            token.ThrowIfCancellationRequested();
+        }
+        if ((int)currentColor != 255 && ShouldWriteEnd(currentColor))
+            await writer.WriteAsync(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        if (div)
+            writer.Write(OuterEndHtmlTagSymbol);
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+            await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        if (_writeNewline)
+            await writer.WriteAsync(Environment.NewLine).ConfigureAwait(false);
+        if (dispose)
+            writer.Dispose();
     }
     private static string? GetKeyword(Type type)
     {
@@ -278,17 +433,19 @@ public class StackTraceCleaner
     private static unsafe string GetExtANSIForegroundString(int argb)
     {
         // https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences?redirectedfrom=MSDN#text-formatting
-        byte r = (byte)(argb << 16);
-        byte g = (byte)(argb << 8);
-        byte b = (byte)argb;
-        int l = 9 + (r > 9 ? r > 99 ? 3 : 2 : 1) + (g > 9 ? g > 99 ? 3 : 2 : 1) + (b > 9 ? b > 99 ? 3 : 2 : 1); 
+        byte r = unchecked((byte)(argb >> 16));
+        byte g = unchecked((byte)(argb >> 8));
+        byte b = unchecked((byte)argb);
+        int l = 10 + (r > 9 ? r > 99 ? 3 : 2 : 1) + (g > 9 ? g > 99 ? 3 : 2 : 1) + (b > 9 ? b > 99 ? 3 : 2 : 1); 
         char* chrs = stackalloc char[l];
         chrs[0] = ConsoleEscapeCharacter;
         chrs[1] = '[';
         chrs[2] = '3';
         chrs[3] = '8';
         chrs[4] = ';';
-        int index = 3;
+        chrs[5] = '2';
+        chrs[6] = ';';
+        int index = 6;
         if (r > 99)
             chrs[++index] = (char)(r / 100 + 48);
         if (r > 9)
@@ -306,24 +463,14 @@ public class StackTraceCleaner
         if (b > 9)
             chrs[++index] = (char)((b % 100) / 10 + 48);
         chrs[++index] = (char)(b % 10 + 48);
-        return new string(chrs, 0, 15);
+        chrs[index + 1] = 'm';
+        return new string(chrs, 0, l);
     }
     private static unsafe string GetUnityString(int argb)
     {
         char* chrs = stackalloc char[15];
         chrs[0] = '<'; chrs[1] = 'c'; chrs[2] = 'o'; chrs[3] = 'l'; chrs[4] = 'o'; chrs[5] = 'r'; chrs[6] = '='; chrs[7] = '#';
-        byte d = (byte)((argb << 16) & 15);
-        chrs[8] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 20) & 15);
-        chrs[9] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 8) & 15);
-        chrs[10] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 12) & 15);
-        chrs[11] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)(argb & 15);
-        chrs[12] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 4) & 15);
-        chrs[13] = (char)(d > 9 ? d + 87 : d + 48);
+        GetHex(argb, chrs + 8);
         chrs[14] = '>';
         return new string(chrs, 0, 15);
     }
@@ -349,7 +496,7 @@ public class StackTraceCleaner
                 TokenType.LinesHiddenWarning => LinesHiddenWarningClassName,
                 _ => string.Empty
             };
-            return "<span class=\"" + classname + "\">";
+            return StartSpanTagStyleClassP1 + classname + StartSpanTagStyleClassP2;
         }
         int argb = GetColor(token);
         if (!_isRgbaColor)
@@ -360,39 +507,52 @@ public class StackTraceCleaner
         chrs[6] = 's'; chrs[7] = 't'; chrs[8] = 'y'; chrs[9] = 'l'; chrs[10] = 'e'; chrs[11] = '=';
         chrs[12] = '"'; chrs[13] = 'c'; chrs[14] = 'o'; chrs[15] = 'l'; chrs[16] = 'o'; chrs[17] = 'r';
         chrs[18] = ':'; chrs[19] = '#';
-        byte d = (byte)((argb << 16) & 15);
-        chrs[20] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 20) & 15);
-        chrs[21] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 8) & 15);
-        chrs[22] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 12) & 15);
-        chrs[23] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)(argb & 15);
-        chrs[24] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 4) & 15);
-        chrs[25] = (char)(d > 9 ? d + 87 : d + 48);
+        GetHex(argb, chrs + 20);
         chrs[26] = ';'; chrs[27] = '"'; chrs[28] = '>';
-        return new string(chrs, 0, 15);
+        return new string(chrs, 0, 29);
+    }
+    private unsafe string GetDivTag()
+    {
+        if (_config.HtmlUseClassNames)
+            return OuterStartHtmlTagStyleClass;
+        
+        int argb = _config.Colors.HtmlBackgroundColor;
+        if (!_isRgbaColor)
+            argb = Color32Config.ToArgb((ConsoleColor)(argb - 1));
+        // <span style="color:#ffffff;">
+        char* chrs = stackalloc char[39];
+        chrs[0] = '<'; chrs[1] = 'd'; chrs[2] = 'i'; chrs[3] = 'v'; chrs[4] = ' '; chrs[5] = 's';
+        chrs[6] = 't'; chrs[7] = 'y'; chrs[8] = 'l'; chrs[9] = 'e'; chrs[10] = '='; chrs[11] = '"';
+        chrs[12] = 'b'; chrs[13] = 'a'; chrs[14] = 'c'; chrs[15] = 'k'; chrs[16] = 'g'; chrs[17] = 'r'; chrs[18] = 'o';
+        chrs[19] = 'u'; chrs[20] = 'n'; chrs[21] = 'd'; chrs[22] = '-'; chrs[23] = 'c'; chrs[24] = 'o';
+        chrs[25] = 'l'; chrs[26] = 'o'; chrs[27] = 'r';
+        chrs[28] = ':'; chrs[29] = '#';
+        GetHex(argb, chrs + 30);
+        chrs[36] = ';'; chrs[37] = '"'; chrs[38] = '>';
+        return new string(chrs, 0, 39);
     }
     private static unsafe string GetTMProString(int argb)
     {
         char* chrs = stackalloc char[9];
         chrs[0] = '<'; chrs[1] = '#';
-        byte d = (byte)((argb << 16) & 15);
-        chrs[2] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 20) & 15);
-        chrs[3] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 8) & 15);
-        chrs[4] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 12) & 15);
-        chrs[5] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)(argb & 15);
-        chrs[6] = (char)(d > 9 ? d + 87 : d + 48);
-        d = (byte)((argb << 4) & 15);
-        chrs[7] = (char)(d > 9 ? d + 87 : d + 48);
+        GetHex(argb, chrs + 2);
         chrs[8] = '>';
         return new string(chrs, 0, 9);
+    }
+    private static unsafe void GetHex(int argb, char* chrs)
+    {
+        byte d = (byte)((argb >> 20) & 15);
+        chrs[0] = (char)(d > 9 ? d + 87 : d + 48);
+        d = (byte)((argb >> 16) & 15);
+        chrs[1] = (char)(d > 9 ? d + 87 : d + 48);
+        d = (byte)((argb >> 12) & 15);
+        chrs[2] = (char)(d > 9 ? d + 87 : d + 48);
+        d = (byte)((argb >> 8) & 15);
+        chrs[3] = (char)(d > 9 ? d + 87 : d + 48);
+        d = (byte)((argb >> 4) & 15);
+        chrs[4] = (char)(d > 9 ? d + 87 : d + 48);
+        d = (byte)(argb & 15);
+        chrs[5] = (char)(d > 9 ? d + 87 : d + 48);
     }
     private int GetColor(TokenType type) => type switch
     {
@@ -463,7 +623,7 @@ public class StackTraceCleaner
             {
                 if (type.GetElementType() is { } elemType)
                 {
-                    yield return new SpanData((isOut ? OutSymbol : RefSymbol) + SpaceSymbolStr, TokenType.Punctuation);
+                    yield return new SpanData((isOut ? OutSymbol : RefSymbol) + SpaceSymbolStr, TokenType.Keyword);
                     foreach (SpanData d in EnumerateTypeName(elemType))
                         yield return d;
                     yield break;
@@ -506,6 +666,12 @@ public class StackTraceCleaner
                 yield return new SpanData(type.Name, GetTypeColor(type));
         }
     }
+    private string GetEndTag() => _config.ColorFormatting switch
+    {
+        StackColorFormatType.UnityRichText => UnityEndColorSymbol,
+        StackColorFormatType.Html => HtmlEndSpanSymbol,
+        _ => string.Empty
+    };
     private static MethodInfo? TryGetMethod(Type compGenType)
     {
         Type[] types = compGenType.Assembly.GetTypes();
@@ -532,57 +698,8 @@ public class StackTraceCleaner
 
         return method;
     }
-    private void WriteToTextWriterIntl(StackTrace trace, TextWriter writer)
-    {
-        TokenType currentColor = (TokenType)255;
-        foreach (SpanData span in EnumerateSpans(trace))
-        {
-            if (_appendColor && span.Color != TokenType.Space && currentColor != span.Color)
-                writer.Write(GetColorString(span.Color));
-
-            if (span.Text != null)
-                writer.Write(span.Text);
-            else
-                writer.Write(span.Char);
-
-            if (_appendColor && _reqEndColor &&
-                _config.ColorFormatting is StackColorFormatType.UnityRichText or StackColorFormatType.Html &&
-                span.Color != TokenType.Space && currentColor != span.Color)
-                writer.Write(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol);
-            currentColor = span.Color;
-        }
-
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
-            writer.Write(GetANSIResetString());
-        writer.WriteLine();
-    }
-    private async Task WriteToTextWriterIntlAsync(StackTrace trace, TextWriter writer, CancellationToken token = default, bool dispose = true)
-    {
-        token.ThrowIfCancellationRequested();
-        TokenType currentColor = (TokenType)255;
-        foreach (SpanData span in EnumerateSpans(trace))
-        {
-            if (_appendColor && span.Color != TokenType.Space && currentColor != span.Color)
-                await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
-
-            if (span.Text != null)
-                await writer.WriteAsync(span.Text).ConfigureAwait(false);
-            else
-                await writer.WriteAsync(span.Char).ConfigureAwait(false);
-            token.ThrowIfCancellationRequested();
-
-            if (_appendColor && _reqEndColor &&
-                _config.ColorFormatting is StackColorFormatType.UnityRichText or StackColorFormatType.Html &&
-                span.Color != TokenType.Space && currentColor != span.Color)
-                await writer.WriteAsync(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol).ConfigureAwait(false);
-            currentColor = span.Color;
-        }
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
-            await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
-        await writer.WriteLineAsync().ConfigureAwait(false);
-        if (dispose)
-            writer.Dispose();
-    }
+    private bool ShouldWriteEnd(TokenType token) => _appendColor && _reqEndColor &&
+                                                    token != TokenType.Space;
     private IEnumerable<SpanData> EnumerateSpans(StackTrace trace)
     {
         if (trace.GetFrames() is not { Length: > 0 } frames)
@@ -652,10 +769,21 @@ public class StackTraceCleaner
                 }
             }
             next:
-            if (hasSentOne)
-                yield return new SpanData(Environment.NewLine + AtPrefixSymbol, TokenType.FlowKeyword);
-            else
+            if (_writeNewline)
             {
+                if (hasSentOne)
+                {
+                    yield return new SpanData(Environment.NewLine + AtPrefixSymbol, TokenType.FlowKeyword);
+                }
+                else
+                {
+                    yield return new SpanData(AtPrefixSymbol, TokenType.FlowKeyword);
+                    hasSentOne = true;
+                }
+            }
+            else if (_writeParaTags)
+            {
+                yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
                 yield return new SpanData(AtPrefixSymbol, TokenType.FlowKeyword);
                 hasSentOne = true;
             }
@@ -708,7 +836,7 @@ public class StackTraceCleaner
                         if (_config.ColorFormatting != StackColorFormatType.None)
                         {
                             int index = -1;
-                            int lastIndex = 0;
+                            int lastIndex = -1;
                             while (true)
                             {
                                 index = ns!.IndexOf(MemberSeparatorSymbol, index + 1);
@@ -718,7 +846,7 @@ public class StackTraceCleaner
                                     yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
                                 }
                                 if (index >= ns.Length - 1) break;
-                                yield return new SpanData(ns.Substring(lastIndex, index - lastIndex - 1), TokenType.Namespace);
+                                yield return new SpanData(ns.Substring(lastIndex + 1, index - lastIndex - 1), TokenType.Namespace);
                                 lastIndex = index;
                             }
 
@@ -726,7 +854,7 @@ public class StackTraceCleaner
                             {
                                 if (lastIndex > 0)
                                     yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                                yield return new SpanData(ns.Substring(lastIndex, ns.Length - lastIndex - 1), TokenType.Namespace);
+                                yield return new SpanData(ns.Substring(lastIndex + 1, ns.Length - lastIndex - 1), TokenType.Namespace);
                             }
                         }
                         else yield return new SpanData(ns!, TokenType.Space);
@@ -845,51 +973,22 @@ public class StackTraceCleaner
                 yield return new SpanData(SpaceSymbolStr + HiddenMethodContentSymbol + SpaceSymbolStr, TokenType.ExtraData);
                 yield return new SpanData(MethodBodyCloseSymbol, TokenType.Punctuation);
             }
+
+            string ed = string.Empty;
             if (_config.IncludeSourceData)
             {
-                bool anyExtra = false;
                 int ln = frame.GetFileLineNumber();
                 if (ln != 0)
-                {
-                    if (!anyExtra)
-                    {
-                        if (_config.PutSourceDataOnNewLine)
-                            yield return new SpanData(Environment.NewLine, TokenType.Space);
-                        else
-                            yield return new SpanData(SpaceSymbol, TokenType.Space);
-                        anyExtra = true;
-                    }
+                    ed = SpaceSymbolStr + LineNumberPrefixSymbol + ln.ToString(_config.Locale);
 
-                    yield return new SpanData(SpaceSymbolStr + LineNumberPrefixSymbol + ln.ToString(_config.Locale), TokenType.ExtraData);
-                }
                 ln = frame.GetFileColumnNumber();
                 if (ln != 0)
-                {
-                    if (!anyExtra)
-                    {
-                        if (_config.PutSourceDataOnNewLine)
-                            yield return new SpanData(Environment.NewLine, TokenType.Space);
-                        else
-                            yield return new SpanData(SpaceSymbol, TokenType.Space);
-                        anyExtra = true;
-                    }
-                    yield return new SpanData(SpaceSymbolStr + ColumnNumberPrefixSymbol + ln.ToString(_config.Locale), TokenType.ExtraData);
-                }
+                    ed += SpaceSymbolStr + ColumnNumberPrefixSymbol + ln.ToString(_config.Locale);
 
                 int ilOff = frame.GetILOffset();
                 if (ilOff != -1)
-                {
-                    if (!anyExtra)
-                    {
-                        if (_config.PutSourceDataOnNewLine)
-                            yield return new SpanData(Environment.NewLine, TokenType.Space);
-                        else
-                            yield return new SpanData(SpaceSymbol, TokenType.Space);
-                        anyExtra = true;
-                    }
-                    yield return new SpanData(SpaceSymbolStr + ILOffsetPrefixSymbol + SpaceSymbolStr + ArrayOpenSymbol
-                     + "0x" + ilOff.ToString("X6", _config.Locale) + ArrayCloseSymbol, TokenType.ExtraData);
-                }
+                    ed += SpaceSymbolStr + ILOffsetPrefixSymbol + SpaceSymbolStr + ArrayOpenSymbol
+                          + "0x" + ilOff.ToString("X6", _config.Locale) + ArrayCloseSymbol;
 
                 string? file = null;
                 try
@@ -902,22 +1001,32 @@ public class StackTraceCleaner
                 }
                 if (file != null)
                 {
-                    if (!anyExtra)
+                    ed += SpaceSymbolStr + FilePrefixSymbol + DoubleQuotationMarkSymbol
+                          + Path.Combine(Path.GetFileName(Path.GetDirectoryName(file)) ?? RootDirectorySymbol, Path.GetFileName(file)) +
+                          DoubleQuotationMarkSymbol;
+                }
+                if (ed.Length > 0)
+                {
+                    if (_writeParaTags && _config.PutSourceDataOnNewLine)
                     {
-                        if (_config.PutSourceDataOnNewLine)
-                            yield return new SpanData(Environment.NewLine, 0);
-                        else
-                            yield return new SpanData(SpaceSymbol, 0);
+                        yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
+                        yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
                     }
-                    yield return new SpanData(SpaceSymbolStr + FilePrefixSymbol + DoubleQuotationMarkSymbol
-                                              + Path.Combine(Path.GetFileName(Path.GetDirectoryName(file)) ?? RootDirectorySymbol, Path.GetFileName(file)) +
-                                              DoubleQuotationMarkSymbol, TokenType.ExtraData);
+                    yield return new SpanData((_config.PutSourceDataOnNewLine ? (_writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) : SpaceSymbolStr) + ed, TokenType.ExtraData);
                 }
             }
+            if (_writeParaTags)
+                yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
             skip: ;
         }
         if (hasHidden && _config.WarnForHiddenLines)
-            yield return new SpanData(Environment.NewLine + HiddenLineWarning, TokenType.LinesHiddenWarning);
+        {
+            if (_writeParaTags)
+                yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
+            yield return new SpanData((_writeNewline ? Environment.NewLine : string.Empty) + HiddenLineWarning, TokenType.LinesHiddenWarning);
+            if (_writeParaTags)
+                yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
+        }
     }
     private readonly struct SpanData
     {
@@ -955,5 +1064,6 @@ public class StackTraceCleaner
         Punctuation,
         ExtraData,
         LinesHiddenWarning,
+        EndTag
     }
 }

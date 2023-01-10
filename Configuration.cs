@@ -25,6 +25,7 @@ public class StackCleanerConfiguration : ICloneable
     private bool _includeNamespaces = true;
     private bool _useTypeAliases = true;
     private bool _htmlUseClassNames;
+    private bool _htmlWriteOuterDiv = true;
     private StackColorFormatType _colorFormatting = StackColorFormatType.None;
     private IReadOnlyCollection<Type> _hiddenTypes = StackTraceCleaner.DefaultHiddenTypes;
 
@@ -145,9 +146,9 @@ public class StackCleanerConfiguration : ICloneable
     }
 
     /// <summary>
-    /// If <see cref="ColorFormatting"/> is set to <see cref="ColorFormatting.Html"/>
+    /// If <see cref="ColorFormatting"/> is set to <see cref="StackColorFormatType.Html"/>,
+    /// use css class names (defined as public constants in <see cref="StackTraceCleaner"/>) instead of style tags.
     /// </summary>
-    /// <remarks>ex. <see cref="int"/> instead of <see cref="Int32">Int32</see>.</remarks>
     /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
     public bool HtmlUseClassNames
     {
@@ -157,6 +158,22 @@ public class StackCleanerConfiguration : ICloneable
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
             _htmlUseClassNames = value;
+        }
+    }
+
+    /// <summary>
+    /// If <see cref="ColorFormatting"/> is set to <see cref="StackColorFormatType.Html"/>,
+    /// write an outer &lt;div&gt; with a background color around the output HTML.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public bool HtmlWriteOuterDiv
+    {
+        get => _htmlWriteOuterDiv;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _htmlWriteOuterDiv = value;
         }
     }
 
@@ -173,7 +190,7 @@ public class StackCleanerConfiguration : ICloneable
         {
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
-            if (value is < 0 or > StackColorFormatType.ExtendedANSIColor)
+            if (value is < 0 or > StackColorFormatType.Html)
                 throw new ArgumentOutOfRangeException(nameof(value));
             _colorFormatting = value;
         }
@@ -293,6 +310,7 @@ public abstract class ColorConfig
     internal int PunctuationColor;
     internal int ExtraDataColor;
     internal int LinesHiddenWarningColor;
+    internal int HtmlBackgroundColor;
     protected internal ColorConfig() { }
 }
 
@@ -518,6 +536,21 @@ public sealed class Color4Config : ColorConfig
         }
     }
 
+    /// <summary>
+    /// Color of the optionally added background when writing as HTML.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public new ConsoleColor HtmlBackgroundColor
+    {
+        get => (ConsoleColor)(base.HtmlBackgroundColor - 1);
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            base.HtmlBackgroundColor = (int)value + 1;
+        }
+    }
+
     public Color4Config()
     {
         KeywordColor = ConsoleColor.Blue;
@@ -534,29 +567,21 @@ public sealed class Color4Config : ColorConfig
         PunctuationColor = ConsoleColor.DarkGray;
         ExtraDataColor = ConsoleColor.DarkGray;
         LinesHiddenWarningColor = ConsoleColor.Yellow;
+        HtmlBackgroundColor = ConsoleColor.Black;
     }
     internal static ConsoleColor ToConsoleColor(int argb)
     {
-        int bits = ((argb << 16) & byte.MaxValue) > 128 || ((argb << 8) & byte.MaxValue) > 128 || (argb & byte.MaxValue) > 128 ? 8 : 0;
-        if (((argb << 16) & byte.MaxValue) > 128)
+        int bits = ((argb >> 16) & byte.MaxValue) > 128 || ((argb >> 8) & byte.MaxValue) > 128 || (argb & byte.MaxValue) > 128 ? 8 : 0;
+        if (((argb >> 16) & byte.MaxValue) > 180)
             bits |= 4;
-        if (((argb << 8) & byte.MaxValue) > 128)
+        if (((argb >> 8) & byte.MaxValue) > 180)
             bits |= 2;
-        if ((argb & byte.MaxValue) > 128)
+        if ((argb & byte.MaxValue) > 180)
             bits |= 1;
         return (ConsoleColor)bits;
     }
-    public static ConsoleColor ToConsoleColor(Color color)
-    {
-        int bits = color.R > 128 || color.G > 128 || color.B > 128 ? 8 : 0;
-        if (color.R > 128)
-            bits |= 4;
-        if (color.G > 128)
-            bits |= 2;
-        if (color.B > 128)
-            bits |= 1;
-        return (ConsoleColor)bits;
-    }
+
+    public static ConsoleColor ToConsoleColor(Color color) => ToConsoleColor(color.ToArgb());
 }
 public sealed class Color32Config : ColorConfig
 {
@@ -780,6 +805,21 @@ public sealed class Color32Config : ColorConfig
         }
     }
 
+    /// <summary>
+    /// Color of the optionally added background when writing as HTML.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public new Color HtmlBackgroundColor
+    {
+        get => Color.FromArgb(base.HtmlBackgroundColor - 1);
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            base.HtmlBackgroundColor = value.ToArgb();
+        }
+    }
+
     public Color32Config()
     {
         KeywordColor = Color.FromArgb(255, 86, 156, 214);
@@ -794,47 +834,33 @@ public sealed class Color32Config : ColorConfig
         EnumColor = Color.FromArgb(255, 184, 215, 163);
         NamespaceColor = Color.FromArgb(255, 220, 220, 220);
         PunctuationColor = Color.FromArgb(255, 180, 180, 180);
-        ExtraDataColor = Color.FromArgb(255, 87, 166, 74);
+        ExtraDataColor = Color.FromArgb(255, 98, 98, 98);
         LinesHiddenWarningColor = Color.FromArgb(255, 220, 220, 0);
+        HtmlBackgroundColor = Color.FromArgb(255, 30, 30, 30);
     }
-    public static Color ToColor(ConsoleColor color)
-    {
-        int num = (int)color;
-        byte r = 0;
-        byte g = 0;
-        byte b = 0;
-        if ((num & 8) == 8)
-        {
-            r += 128;
-            g += 128;
-            b += 128;
-        }
-        if ((num & 4) == 4)
-            r += 64;
-        if ((num & 2) == 2)
-            g += 64;
-        if ((num & 1) == 1)
-            b += 64;
-        return Color.FromArgb(byte.MaxValue, r, g, b);
-    }
+
+    public static Color ToColor(ConsoleColor color) => Color.FromArgb(ToArgb(color));
     internal static int ToArgb(ConsoleColor color)
     {
-        int num = (int)color;
-        byte r = 0;
-        byte g = 0;
-        byte b = 0;
-        if ((num & 8) == 8)
+        // Based off Windows 10 Console colors from https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
+        return color switch
         {
-            r += 128;
-            g += 128;
-            b += 128;
-        }
-        if ((num & 4) == 4)
-            r += 64;
-        if ((num & 2) == 2)
-            g += 64;
-        if ((num & 1) == 1)
-            b += 64;
-        return r << 16 | g << 8 | b;
+            ConsoleColor.Black => unchecked((int)0xff0c0c0c),
+            ConsoleColor.DarkRed => unchecked((int)0xffc50f1f),
+            ConsoleColor.DarkGreen => unchecked((int)0xff13a10e),
+            ConsoleColor.DarkYellow => unchecked((int)0xffc19c00),
+            ConsoleColor.DarkBlue => unchecked((int)0xff0037da),
+            ConsoleColor.DarkMagenta => unchecked((int)0xff881798),
+            ConsoleColor.DarkCyan => unchecked((int)0xff3a96dd),
+            ConsoleColor.DarkGray => unchecked((int)0xff767676),
+            ConsoleColor.Red => unchecked((int)0xffe74856),
+            ConsoleColor.Green => unchecked((int)0xff16c60c),
+            ConsoleColor.Yellow => unchecked((int)0xfff9f1a5),
+            ConsoleColor.Blue => unchecked((int)0xff3b78ff),
+            ConsoleColor.Magenta => unchecked((int)0xffb4009e),
+            ConsoleColor.Cyan => unchecked((int)0xff61d6d6),
+            ConsoleColor.White => unchecked((int)0xfff2f2f2),
+            _ => unchecked((int)0xffcccccc) // ConsoleColor.Gray
+        };
     }
 }
