@@ -38,20 +38,17 @@ public class StackCleanerConfiguration : ICloneable
     public static StackCleanerConfiguration Default => _default ??= new StackCleanerConfiguration { Frozen = true };
 
     /// <summary>
-    /// Instance of <see cref="Color4Config"/> or <see cref="Color32Config"/>.<br/>
+    /// Instance of <see cref="Color4Config"/>, <see cref="Color32Config"/>, or override <see cref="ColorConfig"/> and make your own color provider.<br/>
     /// Default value is <see cref="Color4Config.Default"/>.
     /// </summary>
     /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
-    /// <exception cref="ArgumentException">Color config is not a valid type. It must be an instance of <see cref="Color4Config"/> or <see cref="Color32Config"/>.</exception>
-    public ColorConfig Colors
+    public ColorConfig? Colors
     {
         get => _colors;
         set
         {
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
-            if (value is { } and not Color4Config and not Color32Config)
-                throw new ArgumentException("Color config is not a valid type. Must be an instance of Color4Config or Color32Config.", nameof(value));
             _colors = value ?? Color4Config.Default;
         }
     }
@@ -340,26 +337,268 @@ public enum StackColorFormatType
 }
 
 
+/// <summary>
+/// Base class for all color configurations.<br/>
+/// To use your own source of colors, override this class and set the values of the color fields to a 32 bit ARGB integer.
+/// <code>
+/// Alpha = (argb &gt;&gt; 24) &amp; 0xFF
+/// Red   = (argb &gt;&gt; 16) &amp; 0xFF
+/// Green = (argb &gt;&gt; 8 ) &amp; 0xFF
+/// Blue  = (argb &gt;&gt; 0 ) &amp; 0xFF
+/// </code>
+/// </summary>
 public abstract class ColorConfig
 {
     protected const string FrozenErrorText = "Color configuration is frozen.";
-    internal bool Frozen;
-    internal int KeywordColor;
-    internal int MethodColor;
-    internal int PropertyColor;
-    internal int ParameterColor;
-    internal int ClassColor;
-    internal int StructColor;
-    internal int FlowKeywordColor;
-    internal int InterfaceColor;
-    internal int GenericParameterColor;
-    internal int EnumColor;
-    internal int NamespaceColor;
-    internal int PunctuationColor;
-    internal int ExtraDataColor;
-    internal int LinesHiddenWarningColor;
-    internal int HtmlBackgroundColor;
-    protected internal ColorConfig() { }
+    private int _keywordColor;
+    private int _methodColor;
+    private int _propertyColor;
+    private int _parameterColor;
+    private int _classColor;
+    private int _structColor;
+    private int _flowKeywordColor;
+    private int _interfaceColor;
+    private int _genericParameterColor;
+    private int _enumColor;
+    private int _namespaceColor;
+    private int _punctuationColor;
+    private int _extraDataColor;
+    private int _linesHiddenWarningColor;
+    private int _htmlBackgroundColor;
+    public bool Frozen { get; internal set; }
+
+    /// <summary>
+    /// Color of keywords including types: <br/><see langword="null"/>, <see langword="bool"/>,
+    /// <see langword="byte"/>, <see langword="char"/>, <see langword="double"/>,
+    /// <see langword="decimal"/>, <see langword="float"/>, <see langword="int"/>, <see langword="long"/>,
+    /// <see langword="sbyte"/>, <see langword="short"/>, <see langword="object"/>, <see langword="string"/>,
+    /// <see langword="uint"/>, <see langword="bool"/>, <see langword="ulong"/>, <see langword="ushort"/>,
+    /// <see langword="void"/><br/>
+    /// method keywords: <br/><see langword="static"/>, <see langword="async"/>, <see langword="enumerator"/>,
+    /// <see langword="get"/>, <see langword="set"/>, <see langword="anonymous"/><br/>
+    /// and the <see langword="global"/> and <see langword="params"/> keywords.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int KeywordColor
+    {
+        get => _keywordColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _keywordColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of method names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int MethodColor
+    {
+        get => _methodColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _methodColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of property names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int PropertyColor
+    {
+        get => _propertyColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _propertyColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of parameter names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int ParameterColor
+    {
+        get => _parameterColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _parameterColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of class type names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int ClassColor
+    {
+        get => _classColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _classColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of value type names (not including enums).
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int StructColor
+    {
+        get => _structColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _structColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of flow keywords, currently only used for the 'at' at the beginning of each declaration.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int FlowKeywordColor
+    {
+        get => _flowKeywordColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _flowKeywordColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of interface type names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int InterfaceColor
+    {
+        get => _interfaceColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _interfaceColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of generic parameter names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int GenericParameterColor
+    {
+        get => _genericParameterColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _genericParameterColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of enum type names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int EnumColor
+    {
+        get => _enumColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _enumColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of namespaces.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int NamespaceColor
+    {
+        get => _namespaceColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _namespaceColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of any punctuation: periods, commas, parenthesis, etc.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int PunctuationColor
+    {
+        get => _punctuationColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _punctuationColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of the source data (line number, column number, IL offset, and file name).
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int ExtraDataColor
+    {
+        get => _extraDataColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _extraDataColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of the warning optionally shown when unnecessary lines are removed.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int LinesHiddenWarningColor
+    {
+        get => _linesHiddenWarningColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _linesHiddenWarningColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of the optionally added background when writing as HTML.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int HtmlBackgroundColor
+    {
+        get => _htmlBackgroundColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _htmlBackgroundColor = value;
+        }
+    }
 }
 
 public sealed class Color4Config : ColorConfig
