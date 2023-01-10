@@ -13,7 +13,7 @@
 
 ```cs
 using StackCleaner;
-using Color = System.Drawing.Color;
+using Color = System.Drawing.Color; // only needed when dealing with Color32Config.
 ```
 
 ### Get StackTrace from Exception
@@ -81,6 +81,35 @@ NetworkStream stream = /* etc */;
 
 // async variant also available
 cleaner.WriteToStream(stream, stackTrace, System.Text.Encoding.UTF8);
+```
+
+### Write To TextWriter
+```cs
+StackTraceCleaner cleaner = new StackTraceCleaner(new StackCleanerConfiguration
+{
+  ColorFormatting = StackColorFormatType.UnityRichText,
+  IncludeNamespaces = true,
+  IncludeSourceData = false,
+  HiddenTypes = new Type[]
+  {
+      typeof(ExecutionContext),
+      typeof(TaskAwaiter),
+      typeof(TaskAwaiter<>),
+      typeof(ConfiguredTaskAwaitable.ConfiguredTaskAwaiter),
+      typeof(ConfiguredTaskAwaitable<>.ConfiguredTaskAwaiter),
+      typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo),
+      typeof(UnityEngine.Debug),
+      typeof(UnityEngine.Assert),
+      typeof(UnityEngine.PlayerLoop)
+  }
+});
+
+StackTrace stackTrace = /* etc */;
+Stream stream = /* etc */;
+
+// async variant also available
+using TextWriter writer = new TextWriter(stream, System.Text.Encoding.UTF8);
+cleaner.WriteToTextWriter(stackTrace, writer);
 ```
 
 
@@ -159,4 +188,56 @@ public static readonly StackTraceCleaner StackTraceCleaner = new StackTraceClean
       KeywordColor = Color.FromArgb(255, 230, 255, 153)
     }
 });
+```
+
+### Colors
+`enum StackColorFormatType`
+* `None` => No color formatting, just raw text.
+* `ConsoleColor` => Sets the `Console.ForegroundColor` for each section. Only applicable when printed to console with `WriteToConsole`
+* `UnityRichText` => UnityEngine rich text tags. See more: [Unity Rich Text](https://docs.unity3d.com/Packages/com.unity.ugui@1.0/manual/StyledText.html)
+* `TextMeshProRichText` => TextMeshPro rich text tags. See more: [Unity Rich Text](http://digitalnativestudios.com/textmeshpro/docs/rich-text/)
+* `ANSIColor` => ANSI Terminal text formatting codes. See more: [Microsft: Virtual Terminal Text Formatting](https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences?redirectedfrom=MSDN#text-formatting).
+* `ExtendedANSIColor` => ANSI Terminal text formatting codes. See more: [Microsft: Virtual Terminal Extended Color Formatting](https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences?redirectedfrom=MSDN#extended-colors).
+* `Html` => Text is colored with &lt;span&gt; tags. Use classes instead of constant CSS styles by setting HtmlUseClassNames to true. The classes are public constants in StackTraceCleaner.
+  
+### Custom Color Provider
+```cs
+using StackCleaner;
+using UnityEngine;
+using Color = UnityEngine.Color;
+
+internal sealed class UnityColorConfig : ColorConfig
+{
+    // intead of new you can also override the base properties to provide the colors as ARGB int32s directly.
+    public new Color KeywordColor            { get => FromArgb(base.KeywordColor);            set => base.KeywordColor            = ToArgb(value); }
+    public new Color MethodColor             { get => FromArgb(base.MethodColor);             set => base.MethodColor             = ToArgb(value); }
+    public new Color PropertyColor           { get => FromArgb(base.PropertyColor);           set => base.PropertyColor           = ToArgb(value); }
+    public new Color ParameterColor          { get => FromArgb(base.ParameterColor);          set => base.ParameterColor          = ToArgb(value); }
+    public new Color ClassColor              { get => FromArgb(base.ClassColor);              set => base.ClassColor              = ToArgb(value); }
+    public new Color StructColor             { get => FromArgb(base.StructColor);             set => base.StructColor             = ToArgb(value); }
+    public new Color FlowKeywordColor        { get => FromArgb(base.FlowKeywordColor);        set => base.FlowKeywordColor        = ToArgb(value); }
+    public new Color InterfaceColor          { get => FromArgb(base.InterfaceColor);          set => base.InterfaceColor          = ToArgb(value); }
+    public new Color GenericParameterColor   { get => FromArgb(base.GenericParameterColor);   set => base.GenericParameterColor   = ToArgb(value); }
+    public new Color EnumColor               { get => FromArgb(base.EnumColor);               set => base.EnumColor               = ToArgb(value); }
+    public new Color NamespaceColor          { get => FromArgb(base.NamespaceColor);          set => base.NamespaceColor          = ToArgb(value); }
+    public new Color PunctuationColor        { get => FromArgb(base.PunctuationColor);        set => base.PunctuationColor        = ToArgb(value); }
+    public new Color ExtraDataColor          { get => FromArgb(base.ExtraDataColor);          set => base.ExtraDataColor          = ToArgb(value); }
+    public new Color LinesHiddenWarningColor { get => FromArgb(base.LinesHiddenWarningColor); set => base.LinesHiddenWarningColor = ToArgb(value); }
+    public new Color HtmlBackgroundColor     { get => FromArgb(base.HtmlBackgroundColor);     set => base.HtmlBackgroundColor     = ToArgb(value); }
+    public Color FromArgb(int value)
+    {
+        return new Color(
+            unchecked((byte)(value >> 16)) / 255f,
+            unchecked((byte)(value >> 8))  / 255f,
+            unchecked((byte)value)         / 255f,
+            1f);
+    }
+    public int ToArgb(Color color)
+    {
+        return 0xFF << 24 |
+               (byte)Math.Min(255, Mathf.RoundToInt(color.r * 255)) << 16 |
+               (byte)Math.Min(255, Mathf.RoundToInt(color.g * 255)) << 8  |
+               (byte)Math.Min(255, Mathf.RoundToInt(color.b * 255));
+    }
+}
 ```
