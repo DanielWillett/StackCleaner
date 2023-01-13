@@ -224,7 +224,7 @@ internal sealed class UnityColorConfig : ColorConfig
     public new Color ExtraDataColor          { get => FromArgb(base.ExtraDataColor);          set => base.ExtraDataColor          = ToArgb(value); }
     public new Color LinesHiddenWarningColor { get => FromArgb(base.LinesHiddenWarningColor); set => base.LinesHiddenWarningColor = ToArgb(value); }
     public new Color HtmlBackgroundColor     { get => FromArgb(base.HtmlBackgroundColor);     set => base.HtmlBackgroundColor     = ToArgb(value); }
-    public Color FromArgb(int value)
+    public static Color FromArgb(int value)
     {
         return new Color(
             unchecked((byte)(value >> 16)) / 255f,
@@ -232,7 +232,7 @@ internal sealed class UnityColorConfig : ColorConfig
             unchecked((byte)value)         / 255f,
             1f);
     }
-    public int ToArgb(Color color)
+    public static int ToArgb(Color color)
     {
         return 0xFF << 24 |
                (byte)Math.Min(255, Mathf.RoundToInt(color.r * 255)) << 16 |
