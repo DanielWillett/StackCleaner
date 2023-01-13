@@ -50,12 +50,14 @@ public class StackCleanerConfiguration : ICloneable
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
             _colors = value ?? Color4Config.Default;
+            if (_colors is Color4Config && _colorFormatting == StackColorFormatType.ExtendedANSIColor)
+                _colorFormatting = StackColorFormatType.ANSIColor;
         }
     }
 
     /// <summary>
     /// Used to convert line numbers, column numbers, and IL offsets to strings.<br/>
-    /// Default value is <see cref="CultureInfo.InvarientCulture"/>.
+    /// Default value is <see cref="CultureInfo.InvariantCulture"/>.
     /// </summary>
     /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
     public IFormatProvider Locale
@@ -246,9 +248,9 @@ public class StackCleanerConfiguration : ICloneable
     /// Default values:<br/><br/>
     /// <see cref="ExecutionContext"/><br/>
     /// <see cref="TaskAwaiter"/><br/>
-    /// <see cref="TaskAwaiter{}"/><br/>
+    /// <see cref="TaskAwaiter{TResult}"/><br/>
     /// <see cref="ConfiguredTaskAwaitable.ConfiguredTaskAwaiter"/><br/>
-    /// <see cref="ConfiguredTaskAwaitable{}.ConfiguredTaskAwaiter"/><br/>
+    /// <see cref="ConfiguredTaskAwaitable{TResult}.ConfiguredTaskAwaiter"/><br/>
     /// <see cref="ExceptionDispatchInfo"/><br/>
     /// Use <see cref="GetHiddenTypes"/> to <see langword="get"/> the value.
     /// </summary>
@@ -281,7 +283,11 @@ public class StackCleanerConfiguration : ICloneable
     /// <summary>As close as possible to Visual Studio default formatting.</summary>
     public StackCleanerConfiguration() { }
 
-    public object Clone() => new StackCleanerConfiguration()
+    /// <summary>
+    /// Creates a non-frozen clone of this <see cref="StackCleanerConfiguration"/>.
+    /// </summary>
+    /// <returns>An exact copy of this <see cref="StackCleanerConfiguration"/>, safe to cast. Never is frozen.</returns>
+    public object Clone() => new StackCleanerConfiguration
     {
         _colorFormatting = _colorFormatting,
         _colors = _colors,
@@ -292,7 +298,7 @@ public class StackCleanerConfiguration : ICloneable
         _includeNamespaces = _includeNamespaces
     };
 
-    /// <returns>A readonly array representing the current hidden types. May equal <see cStackTraceCleanereaner.Defaults"/> </returns>
+    /// <returns>A readonly array representing the current hidden types. May equal <see cref="StackTraceCleaner.DefaultHiddenTypes"/> </returns>
     public IReadOnlyCollection<Type> GetHiddenTypes() => _hiddenTypes;
 }
 
@@ -349,6 +355,7 @@ public enum StackColorFormatType
 /// </summary>
 public abstract class ColorConfig
 {
+    /// <summary>Error text used to throw a <see cref="NotSupportedException"/> when the config is frozen.</summary>
     protected const string FrozenErrorText = "Color configuration is frozen.";
     private int _keywordColor;
     private int _methodColor;
@@ -365,6 +372,9 @@ public abstract class ColorConfig
     private int _extraDataColor;
     private int _linesHiddenWarningColor;
     private int _htmlBackgroundColor;
+    /// <summary>
+    /// This property is set to <see langword="true"/> after the config is passed to a <see cref="StackTraceCleaner"/> so it can not be modified.
+    /// </summary>
     public bool Frozen { get; internal set; }
 
     /// <summary>
@@ -599,12 +609,43 @@ public abstract class ColorConfig
             _htmlBackgroundColor = value;
         }
     }
+
+    internal static int ToArgb(ConsoleColor color)
+    {
+        // Based off Windows 10 Console colors from https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
+        return color switch
+        {
+            ConsoleColor.Black => unchecked((int)0xff0c0c0c),
+            ConsoleColor.DarkRed => unchecked((int)0xffc50f1f),
+            ConsoleColor.DarkGreen => unchecked((int)0xff13a10e),
+            ConsoleColor.DarkYellow => unchecked((int)0xffc19c00),
+            ConsoleColor.DarkBlue => unchecked((int)0xff0037da),
+            ConsoleColor.DarkMagenta => unchecked((int)0xff881798),
+            ConsoleColor.DarkCyan => unchecked((int)0xff3a96dd),
+            ConsoleColor.DarkGray => unchecked((int)0xff767676),
+            ConsoleColor.Red => unchecked((int)0xffe74856),
+            ConsoleColor.Green => unchecked((int)0xff16c60c),
+            ConsoleColor.Yellow => unchecked((int)0xfff9f1a5),
+            ConsoleColor.Blue => unchecked((int)0xff3b78ff),
+            ConsoleColor.Magenta => unchecked((int)0xffb4009e),
+            ConsoleColor.Cyan => unchecked((int)0xff61d6d6),
+            ConsoleColor.White => unchecked((int)0xfff2f2f2),
+            _ => unchecked((int)0xffcccccc) // ConsoleColor.Gray
+        };
+    }
 }
 
+/// <summary>
+/// Provides colors in the <see cref="ConsoleColor"/> format.
+/// </summary>
 public sealed class Color4Config : ColorConfig
 {
     private static Color4Config? _default;
-    public static Color4Config Default => _default ??= new Color4Config();
+
+    /// <summary>
+    /// Default values of <see cref="Color4Config"/>. Frozen.
+    /// </summary>
+    public static Color4Config Default => _default ??= new Color4Config { Frozen = true };
     /// <summary>
     /// Color of keywords including types: <br/><see langword="null"/>, <see langword="bool"/>,
     /// <see langword="byte"/>, <see langword="char"/>, <see langword="double"/>,
@@ -838,6 +879,9 @@ public sealed class Color4Config : ColorConfig
         }
     }
 
+    /// <summary>
+    /// Sets the default values for <see cref="Color4Config"/>.
+    /// </summary>
     public Color4Config()
     {
         KeywordColor = ConsoleColor.Blue;
@@ -856,6 +900,10 @@ public sealed class Color4Config : ColorConfig
         LinesHiddenWarningColor = ConsoleColor.Yellow;
         HtmlBackgroundColor = ConsoleColor.Black;
     }
+
+    /// <summary>
+    /// Convert ARGB data to <see cref="ConsoleColor"/> (picks the closest).
+    /// </summary>
     internal static ConsoleColor ToConsoleColor(int argb)
     {
         int bits = ((argb >> 16) & byte.MaxValue) > 128 || ((argb >> 8) & byte.MaxValue) > 128 || (argb & byte.MaxValue) > 128 ? 8 : 0;
@@ -867,13 +915,19 @@ public sealed class Color4Config : ColorConfig
             bits |= 1;
         return (ConsoleColor)bits;
     }
-
-    public static ConsoleColor ToConsoleColor(Color color) => ToConsoleColor(color.ToArgb());
 }
+
+/// <summary>
+/// Provides colors in the <see cref="System.Drawing.Color"/> format.
+/// </summary>
 public sealed class Color32Config : ColorConfig
 {
     private static Color32Config? _default;
-    public static Color32Config Default => _default ??= new Color32Config();
+
+    /// <summary>
+    /// Default values of <see cref="Color32Config"/>. Frozen.
+    /// </summary>
+    public static Color32Config Default => _default ??= new Color32Config { Frozen = true };
     /// <summary>
     /// Color of keywords including types: <br/><see langword="null"/>, <see langword="bool"/>,
     /// <see langword="byte"/>, <see langword="char"/>, <see langword="double"/>,
@@ -1107,6 +1161,9 @@ public sealed class Color32Config : ColorConfig
         }
     }
 
+    /// <summary>
+    /// Sets the default values for <see cref="Color32Config"/>.
+    /// </summary>
     public Color32Config()
     {
         KeywordColor = Color.FromArgb(255, 86, 156, 214);
@@ -1126,28 +1183,13 @@ public sealed class Color32Config : ColorConfig
         HtmlBackgroundColor = Color.FromArgb(255, 30, 30, 30);
     }
 
+    /// <summary>
+    /// Convert <see cref="ConsoleColor"/> to <see cref="Color"/>.
+    /// </summary>
     public static Color ToColor(ConsoleColor color) => Color.FromArgb(ToArgb(color));
-    internal static int ToArgb(ConsoleColor color)
-    {
-        // Based off Windows 10 Console colors from https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
-        return color switch
-        {
-            ConsoleColor.Black => unchecked((int)0xff0c0c0c),
-            ConsoleColor.DarkRed => unchecked((int)0xffc50f1f),
-            ConsoleColor.DarkGreen => unchecked((int)0xff13a10e),
-            ConsoleColor.DarkYellow => unchecked((int)0xffc19c00),
-            ConsoleColor.DarkBlue => unchecked((int)0xff0037da),
-            ConsoleColor.DarkMagenta => unchecked((int)0xff881798),
-            ConsoleColor.DarkCyan => unchecked((int)0xff3a96dd),
-            ConsoleColor.DarkGray => unchecked((int)0xff767676),
-            ConsoleColor.Red => unchecked((int)0xffe74856),
-            ConsoleColor.Green => unchecked((int)0xff16c60c),
-            ConsoleColor.Yellow => unchecked((int)0xfff9f1a5),
-            ConsoleColor.Blue => unchecked((int)0xff3b78ff),
-            ConsoleColor.Magenta => unchecked((int)0xffb4009e),
-            ConsoleColor.Cyan => unchecked((int)0xff61d6d6),
-            ConsoleColor.White => unchecked((int)0xfff2f2f2),
-            _ => unchecked((int)0xffcccccc) // ConsoleColor.Gray
-        };
-    }
+
+    /// <summary>
+    /// Convert ARGB data to <see cref="Color"/>.
+    /// </summary>
+    public static ConsoleColor ToConsoleColor(Color color) => Color4Config.ToConsoleColor(color.ToArgb());
 }

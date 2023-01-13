@@ -11,7 +11,17 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace StackCleaner;
-
+/// <summary>
+/// Tool that clears up stack traces to make them much more readable during debugging.<br/>
+/// Supports highly customizable color formatting in the following formats:<br/>
+/// <br/>
+/// • <see cref="ConsoleColor"/><br/>
+/// • ANSI color codes (4-bit)<br/>
+/// • Extended ANSI color codes (32-bit where supported)<br/>
+/// • Unity Rich Text<br/>
+/// • Unity TextMeshPro Rich Text<br/>
+/// • Html (with tags)<br/>
+/// </summary>
 public class StackTraceCleaner
 {
     private const char ConsoleEscapeCharacter = '\u001b';
@@ -60,20 +70,35 @@ public class StackTraceCleaner
     private const string ILOffsetPrefixSymbol = "IL";
     private const string FilePrefixSymbol = "FILE: ";
     private const string HiddenLineWarning = "Some lines hidden for readability.";
+    /// <summary>Html class for the background div.</summary>
     public const string BackgroundClassName = "st_bkgr";
+    /// <summary>Html class for keywords.</summary>
     public const string KeywordClassName = "st_keyword";
+    /// <summary>Html class for methods.</summary>
     public const string MethodClassName = "st_method";
+    /// <summary>Html class for properties.</summary>
     public const string PropertyClassName = "st_property";
+    /// <summary>Html class for parameters.</summary>
     public const string ParameterClassName = "st_parameter";
+    /// <summary>Html class for classes.</summary>
     public const string ClassClassName = "st_class";
+    /// <summary>Html class for structs.</summary>
     public const string StructClassName = "st_struct";
+    /// <summary>Html class for flow keywords.</summary>
     public const string FlowKeywordClassName = "st_flow_keyword";
+    /// <summary>Html class for interface.</summary>
     public const string InterfaceClassName = "st_interface";
+    /// <summary>Html class for generic parameters.</summary>
     public const string GenericParameterClassName = "st_generic_parameter";
+    /// <summary>Html class for enums.</summary>
     public const string EnumClassName = "st_enum";
+    /// <summary>Html class for namespaces.</summary>
     public const string NamespaceClassName = "st_namespace";
+    /// <summary>Html class for punctuation.</summary>
     public const string PunctuationClassName = "st_punctuation";
+    /// <summary>Html class for extra data (source data).</summary>
     public const string ExtraDataClassName = "st_extra_data";
+    /// <summary>Html class for the lines hidden warning.</summary>
     public const string LinesHiddenWarningClassName = "st_lines_hidden_warning";
     private static readonly Type TypeBoolean = typeof(bool);
     private static readonly Type TypeUInt8 = typeof(byte);
@@ -93,6 +118,7 @@ public class StackTraceCleaner
     private static readonly Type TypeVoid = typeof(void);
     private static readonly Type TypeNullableValueType = typeof(Nullable<>);
     private static readonly Type TypeCompilerGenerated = typeof(CompilerGeneratedAttribute);
+    private static readonly Type TypeStateMachineBase = typeof(StateMachineAttribute);
     private static readonly Dictionary<Type, MethodInfo?> CompilerGeneratedStateMachineSourceCache = new Dictionary<Type, MethodInfo?>(64);
 
     // types that are hidden by default. These are all the types used by the Task internal.
@@ -130,11 +156,16 @@ public class StackTraceCleaner
     /// Use <see cref="Default"/> to get a default implementation.
     /// </summary>
     private StackTraceCleaner() : this(StackCleanerConfiguration.Default) { }
+    /// <summary>
+    /// Load a new <see cref="StackTraceCleaner"/> with the specified <paramref name="config"/>.
+    /// </summary>
     public StackTraceCleaner(StackCleanerConfiguration config)
     {
         // freeze config
+        if (config.ColorFormatting == StackColorFormatType.ExtendedANSIColor && config.Colors is Color4Config)
+            config.ColorFormatting = StackColorFormatType.ANSIColor;
         config.Frozen = true;
-        config.Colors.Frozen = true;
+        config.Colors!.Frozen = true;
         _config = config;
 
         // are colors encoded as argb
@@ -164,13 +195,14 @@ public class StackTraceCleaner
             ? 192
             : _config.ColorFormatting == StackColorFormatType.ANSIColor ? 384 : 768;
     }
-    
+
     /// <summary>
     /// Conerts an <see cref="Exception"/> to a stack trace, just calls <see cref="StackTrace(Exception, bool)"/> if a stack trace has been added.
     /// </summary>
     /// <remarks><see cref="Exception.StackTrace"/> only gets set after calling <see langword="throw"/> on the <see cref="Exception"/>.</remarks>
     /// <param name="fetchSourceInfo">Whether or not to capture the file name, line number, and column number of the exception. 
     /// If this isn't needed it's best to set it to false to save computing time.</param>
+    /// <param name="ex">Exception to fetch <see cref="StackTrace"/> from. This will only work after calling <see langword="throw"/> on it.</param>
     /// <returns>A <see cref="StackTrace"/> representing the source of the exception if present, otherwise <see langword="null"/>.</returns>
     public static StackTrace? GetStackTrace(Exception ex, bool fetchSourceInfo = true) => ex.StackTrace != null ? new StackTrace(ex, fetchSourceInfo) : null;
 
@@ -323,7 +355,7 @@ public class StackTraceCleaner
     }
 
     /// <summary>
-    /// Formats the <paramref name="stackTrace"/> and writes it to <paramref name="writer"/>.
+    /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/>.
     /// </summary>
     private void WriteToTextWriterIntl(StackTrace trace, TextWriter writer)
     {
@@ -376,7 +408,7 @@ public class StackTraceCleaner
     }
 
     /// <summary>
-    /// Formats the <paramref name="stackTrace"/> and writes it to <paramref name="writer"/> asynchronously.
+    /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
     private async Task WriteToTextWriterIntlAsync(StackTrace trace, TextWriter writer, CancellationToken token = default, bool dispose = true)
     {
@@ -545,7 +577,7 @@ public class StackTraceCleaner
     /// ESC[38;2;*r*;*g*;*b*m
     /// </code> where 'ESC' is '\u001b'.
     /// </summary>
-    /// <param name="argb">32 bit ARGB data, convert using <see cref="System.Drawing.Color.ToArgb"/> and <see cref="System.Drawing.Color.FromArgb"/>.</param>
+    /// <param name="argb">32 bit ARGB data, convert using <see cref="System.Drawing.Color.ToArgb"/> and <see cref="System.Drawing.Color.FromArgb(int)"/>.</param>
     private static unsafe string GetExtANSIForegroundString(int argb)
     {
         // https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences?redirectedfrom=MSDN#text-formatting
@@ -618,7 +650,7 @@ public class StackTraceCleaner
         }
         int argb = GetColor(token);
         if (!_isArgbColor)
-            argb = Color32Config.ToArgb((ConsoleColor)(argb - 1));
+            argb = ColorConfig.ToArgb((ConsoleColor)(argb - 1));
         // <span style="color:#ffffff;">
         char* chrs = stackalloc char[29];
         chrs[0] = '<'; chrs[1] = 's'; chrs[2] = 'p'; chrs[3] = 'a'; chrs[4] = 'n'; chrs[5] = ' ';
@@ -644,9 +676,9 @@ public class StackTraceCleaner
         if (_config.HtmlUseClassNames)
             return OuterStartHtmlTagStyleClass;
         
-        int argb = _config.Colors.HtmlBackgroundColor;
+        int argb = _config.Colors!.HtmlBackgroundColor;
         if (!_isArgbColor)
-            argb = Color32Config.ToArgb((ConsoleColor)(argb - 1));
+            argb = ColorConfig.ToArgb((ConsoleColor)(argb - 1));
         // <span style="color:#ffffff;">
         char* chrs = stackalloc char[39];
         chrs[0] = '<'; chrs[1] = 'd'; chrs[2] = 'i'; chrs[3] = 'v'; chrs[4] = ' '; chrs[5] = 's';
@@ -665,7 +697,7 @@ public class StackTraceCleaner
     /// &lt;color=#xxxxxx&gt;
     /// </code>
     /// </summary>
-    /// <param name="argb">32 bit ARGB data, convert using <see cref="System.Drawing.Color.ToArgb"/> and <see cref="System.Drawing.Color.FromArgb"/>.</param>
+    /// <param name="argb">32 bit ARGB data, convert using <see cref="System.Drawing.Color.ToArgb"/> and <see cref="System.Drawing.Color.FromArgb(int)"/>.</param>
     private static unsafe string GetUnityString(int argb)
     {
         char* chrs = stackalloc char[15];
@@ -680,7 +712,7 @@ public class StackTraceCleaner
     /// &lt;#xxxxxx&gt;
     /// </code>
     /// </summary>
-    /// <param name="argb">32 bit ARGB data, convert using <see cref="System.Drawing.Color.ToArgb"/> and <see cref="System.Drawing.Color.FromArgb"/>.</param>
+    /// <param name="argb">32 bit ARGB data, convert using <see cref="System.Drawing.Color.ToArgb"/> and <see cref="System.Drawing.Color.FromArgb(int)"/>.</param>
     private static unsafe string GetTMProString(int argb)
     {
         char* chrs = stackalloc char[9];
@@ -714,20 +746,20 @@ public class StackTraceCleaner
     /// </summary>
     private int GetColor(TokenType type) => type switch
     {
-        TokenType.Keyword => _config.Colors.KeywordColor,
-        TokenType.Method => _config.Colors.MethodColor,
-        TokenType.Property => _config.Colors.PropertyColor,
-        TokenType.Parameter => _config.Colors.ParameterColor,
-        TokenType.Class => _config.Colors.ClassColor,
-        TokenType.Struct => _config.Colors.StructColor,
-        TokenType.FlowKeyword => _config.Colors.FlowKeywordColor,
-        TokenType.Interface => _config.Colors.InterfaceColor,
-        TokenType.GenericParameter => _config.Colors.GenericParameterColor,
-        TokenType.Enum => _config.Colors.EnumColor,
-        TokenType.Namespace => _config.Colors.NamespaceColor,
-        TokenType.Punctuation => _config.Colors.PunctuationColor,
-        TokenType.ExtraData => _config.Colors.ExtraDataColor,
-        TokenType.LinesHiddenWarning => _config.Colors.LinesHiddenWarningColor,
+        TokenType.Keyword => _config.Colors!.KeywordColor,
+        TokenType.Method => _config.Colors!.MethodColor,
+        TokenType.Property => _config.Colors!.PropertyColor,
+        TokenType.Parameter => _config.Colors!.ParameterColor,
+        TokenType.Class => _config.Colors!.ClassColor,
+        TokenType.Struct => _config.Colors!.StructColor,
+        TokenType.FlowKeyword => _config.Colors!.FlowKeywordColor,
+        TokenType.Interface => _config.Colors!.InterfaceColor,
+        TokenType.GenericParameter => _config.Colors!.GenericParameterColor,
+        TokenType.Enum => _config.Colors!.EnumColor,
+        TokenType.Namespace => _config.Colors!.NamespaceColor,
+        TokenType.Punctuation => _config.Colors!.PunctuationColor,
+        TokenType.ExtraData => _config.Colors!.ExtraDataColor,
+        TokenType.LinesHiddenWarning => _config.Colors!.LinesHiddenWarningColor,
         _ => _isArgbColor ? unchecked((int)uint.MaxValue) : (int)ConsoleColor.Gray + 1
     };
 
@@ -751,10 +783,10 @@ public class StackTraceCleaner
 
         return _config.ColorFormatting switch
         {
-            StackColorFormatType.UnityRichText => GetUnityString(Color32Config.ToArgb((ConsoleColor)(GetColor(token) - 1))),
-            StackColorFormatType.TextMeshProRichText => GetTMProString(Color32Config.ToArgb((ConsoleColor)(GetColor(token) - 1))),
+            StackColorFormatType.UnityRichText => GetUnityString(ColorConfig.ToArgb((ConsoleColor)(GetColor(token) - 1))),
+            StackColorFormatType.TextMeshProRichText => GetTMProString(ColorConfig.ToArgb((ConsoleColor)(GetColor(token) - 1))),
             StackColorFormatType.ANSIColor => GetANSIForegroundString((ConsoleColor)(GetColor(token) - 1)),
-            StackColorFormatType.ExtendedANSIColor => GetExtANSIForegroundString(Color32Config.ToArgb((ConsoleColor)(GetColor(token) - 1))),
+            StackColorFormatType.ExtendedANSIColor => GetExtANSIForegroundString(ColorConfig.ToArgb((ConsoleColor)(GetColor(token) - 1))),
             StackColorFormatType.Html => GetHtmlStartTag(token)
         };
 #pragma warning restore CS8509
@@ -826,8 +858,10 @@ public class StackTraceCleaner
         bool hasHidden = false;
         for (int f = 0; f < frames.Length; ++f)
         {
-            StackFrame frame = frames[f];
+            StackFrame? frame = frames[f];
+            MethodBase? insertAfter = null;
             MethodBase info = frame.GetMethod();
+        redo:
             Type? declType = info.DeclaringType;
             bool async = false;
             bool enumerator = false;
@@ -866,12 +900,15 @@ public class StackTraceCleaner
                         else goto next;
 
                         MethodInfo? originalMethod;
+                        // get method from cache
                         lock (CompilerGeneratedStateMachineSourceCache)
                         {
-                            if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod))
+                            if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod) &&
+                                Attribute.IsDefined(declType, TypeStateMachineBase))
                             {
                                 originalMethod = TryGetMethod(declType);
                                 if (originalMethod == null)
+                                    // add null value to cache so we don't keep trying to fetch it.
                                     CompilerGeneratedStateMachineSourceCache.Add(declType, null);
                             }
                         }
@@ -879,6 +916,24 @@ public class StackTraceCleaner
                         {
                             info = originalMethod;
                             declType = info.DeclaringType;
+                        }
+                    }
+
+                    // try to get the method name from the comp-gen method name, last resort
+                    if (Attribute.IsDefined(info, TypeCompilerGenerated))
+                    {
+                        anonFunc = true;
+                        string name = info.Name;
+                        int st = name.IndexOf('<') + 1;
+                        int end = name.IndexOf('>');
+                        if (st > 0 && end > 2)
+                        {
+                            string methodname = name.Substring(st, end - st);
+
+                            // avoids an ambiguous match error
+                            insertAfter = declType?.GetMethods(BindingFlags.Instance | BindingFlags.Static
+                                | BindingFlags.NonPublic | BindingFlags.Public)
+                                .FirstOrDefault(x => x.Name.Equals(methodname, StringComparison.Ordinal));
                         }
                     }
                 }
@@ -1031,6 +1086,11 @@ public class StackTraceCleaner
                         yield return d;
                     yield return new SpanData(SpaceSymbol, TokenType.Space);
                 }
+                if (async)
+                {
+                    yield return new SpanData(AsyncSymbol, TokenType.Keyword);
+                    yield return new SpanData(SpaceSymbol, TokenType.Space);
+                }
             }
 
             // property accessors will always have the same arguemnts, no need to display them.
@@ -1077,7 +1137,7 @@ public class StackTraceCleaner
 
             string ed = string.Empty;
             // source data (line, column number, IL offset, file)
-            if (_config.IncludeSourceData)
+            if (_config.IncludeSourceData && frame != null)
             {
                 // line and column data
                 if (_config.IncludeLineData)
@@ -1130,6 +1190,13 @@ public class StackTraceCleaner
             if (_writeParaTags)
                 yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
             skip: ;
+            if (insertAfter != null)
+            {
+                info = insertAfter;
+                insertAfter = null;
+                frame = null;
+                goto redo;
+            }
         }
 
         // lines hidden warning
@@ -1148,6 +1215,7 @@ public class StackTraceCleaner
     /// </summary>
     /// <remarks>Most of the time this only returns one span
     /// but can be more if the type is generic or has an element type (pointers, arrays, nullable value types).</remarks>
+    /// <param name="type">Type to format.</param>
     /// <param name="isOut">For parameter declarations, replaces <see langword="ref"/> with <see langword="out"/> in byref types.</param>
     private IEnumerable<SpanData> EnumerateTypeName(Type type, bool isOut = false)
     {
