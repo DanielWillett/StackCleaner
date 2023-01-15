@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -24,6 +25,47 @@ namespace StackCleaner;
 /// </summary>
 public class StackTraceCleaner
 {
+    private static bool IsMono { get; } = Type.GetType("Mono.Runtime") != null;
+
+    // mono uses a different method to store remote stack traces than dotnet,
+    // which don't get displayed on the stack trace.
+    // this means any asnyc stack traces would not show any before the last context change
+    // (this fixes that)
+    private static Func<Exception, StackTrace[]>? MonoCapturedTracesAccessor
+    {
+        get
+        {
+            if (!hasCheckedRemoteAccessor)
+            {
+                hasCheckedRemoteAccessor = true;
+                try
+                {
+                    // generate a getter function for the mono field Exception.captured_traces.
+                    FieldInfo? field = typeof(Exception).GetField("captured_traces", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (field != null)
+                    {
+                        DynamicMethod method = new DynamicMethod("get_captured_traces",
+                            MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
+                            CallingConventions.HasThis,
+                            typeof(StackTrace[]), new Type[] { typeof(Exception) },
+                            typeof(StackTraceCleaner), true);
+                        ILGenerator il = method.GetILGenerator();
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldfld, field);
+                        il.Emit(OpCodes.Ret);
+                        _getMonoRemoteAccessor = (Func<Exception, StackTrace[]>)method.CreateDelegate(typeof(Func<Exception, StackTrace[]>));
+                    }
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
+            return _getMonoRemoteAccessor;
+        }
+    }
+    private static bool hasCheckedRemoteAccessor;
+    private static Func<Exception, StackTrace[]>? _getMonoRemoteAccessor;
     private const char ConsoleEscapeCharacter = '\u001b';
     private const char PointerSymbol = '*';
     private const char MemberSeparatorSymbol = '.';
@@ -207,6 +249,32 @@ public class StackTraceCleaner
     public static StackTrace? GetStackTrace(Exception ex, bool fetchSourceInfo = true) => ex.StackTrace != null ? new StackTrace(ex, fetchSourceInfo) : null;
 
     /// <summary>
+    /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and returns it as a <see cref="string"/> using the runtime's default encoding.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public string GetString(Exception exception)
+    {
+        if (exception == null)
+            throw new ArgumentNullException(nameof(exception));
+        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        Encoding encoding = Encoding.Default;
+        using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult * stackTrace.FrameCount));
+        //stream.Position = 0;
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
+        if (remoteTraces is { Length: > 0 })
+        {
+            for (int i = 0; i < remoteTraces.Length; ++i)
+            {
+                WriteToTextWriterIntl(remoteTraces[i], writer, false);
+            }
+        }
+        WriteToTextWriterIntl(stackTrace, writer, true);
+        writer.Flush();
+        byte[] bytes = stream.GetBuffer();
+        return encoding.GetString(bytes, 0, (int)stream.Length);
+    }
+    /// <summary>
     /// Formats the <paramref name="stackTrace"/> and returns it as a <see cref="string"/> using the runtime's default encoding.
     /// </summary>
     /// <exception cref="ArgumentNullException"/>
@@ -218,7 +286,9 @@ public class StackTraceCleaner
         Encoding encoding = Encoding.Default;
         using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult * stackTrace.FrameCount));
         stream.Position = 0;
-        WriteToStream(stream, stackTrace, encoding);
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+        WriteToTextWriterIntl(stackTrace, writer);
+        writer.Flush();
         byte[] bytes = stream.GetBuffer();
         return encoding.GetString(bytes, 0, (int)stream.Length);
     }
@@ -242,6 +312,35 @@ public class StackTraceCleaner
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
         WriteToTextWriterIntl(stackTrace, writer);
     }
+    /// <summary>
+    /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to <paramref name="stream"/> using <paramref name="encoding"/> to encode it.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="ArgumentException"><paramref name="stream"/> is unable to be written to.</exception>
+    public void WriteToStream(Stream stream, Exception exception, Encoding? encoding = null)
+    {
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (exception == null)
+            throw new ArgumentNullException(nameof(exception));
+        if (!stream.CanWrite)
+            throw new ArgumentException("Stream must be able to write.", nameof(stream));
+
+        encoding ??= Encoding.Default;
+        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
+        if (remoteTraces is { Length: > 0 })
+        {
+            for (int i = 0; i < remoteTraces.Length; ++i)
+            {
+                WriteToTextWriterIntl(remoteTraces[i], writer, false);
+            }
+        }
+        WriteToTextWriterIntl(stackTrace, writer, true);
+        writer.Flush();
+    }
 
     /// <summary>
     /// Formats the <paramref name="stackTrace"/> and writes it to a file at <paramref name="path"/> using <paramref name="encoding"/> to encode it.<br/>
@@ -264,8 +363,31 @@ public class StackTraceCleaner
 
         encoding ??= Encoding.Default;
         using FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, encoding.GetMaxByteCount(_defBufferSizeMult * stackTrace.FrameCount));
-        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
-        WriteToTextWriterIntl(stackTrace, writer);
+        WriteToStream(stream, stackTrace, encoding);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to a file at <paramref name="path"/> using <paramref name="encoding"/> to encode it.<br/>
+    /// If the file exists, it'll be overwritten, otherwise it'll be created.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="IOException"/>
+    /// <exception cref="NotSupportedException"><paramref name="path"/> is not a valid writable file.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is not a valid writable file.</exception>
+    /// <exception cref="System.Security.SecurityException">Missing file access.</exception>
+    /// <exception cref="UnauthorizedAccessException">Missing file write access.</exception>
+    public void WriteToFile(string path, Exception exception, Encoding? encoding = null)
+    {
+        if (path == null)
+            throw new ArgumentNullException(nameof(path));
+        if (exception == null)
+            throw new ArgumentNullException(nameof(exception));
+
+
+        encoding ??= Encoding.Default;
+        using FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, encoding.GetMaxByteCount(_defBufferSizeMult * 8));
+        WriteToStream(stream, exception, encoding);
     }
 
     /// <summary>
@@ -274,7 +396,7 @@ public class StackTraceCleaner
     /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
     /// <exception cref="ArgumentNullException"/>
     /// <exception cref="ArgumentException"><paramref name="stream"/> is unable to be written to.</exception>
-    public Task WriteToStreamAsync(Stream stream, StackTrace stackTrace, Encoding? encoding = null, CancellationToken token = default)
+    public async Task WriteToStreamAsync(Stream stream, StackTrace stackTrace, Encoding? encoding = null, CancellationToken token = default)
     {
         if (stream == null)
             throw new ArgumentNullException(nameof(stream));
@@ -284,8 +406,38 @@ public class StackTraceCleaner
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
 
         encoding ??= Encoding.UTF8;
-        TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
-        return WriteToTextWriterIntlAsync(stackTrace, writer, token, true);
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+    /// <summary>
+    /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to <paramref name="stream"/> asynchronously using <paramref name="encoding"/> to encode it.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="ArgumentException"><paramref name="stream"/> is unable to be written to.</exception>
+    public async Task WriteToStreamAsync(Stream stream, Exception exception, Encoding? encoding = null, CancellationToken token = default)
+    {
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (exception == null)
+            throw new ArgumentNullException(nameof(exception));
+        if (!stream.CanWrite)
+            throw new ArgumentException("Stream must be able to write.", nameof(stream));
+
+        encoding ??= Encoding.UTF8;
+        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
+        if (remoteTraces is { Length: > 0 })
+        {
+            for (int i = 0; i < remoteTraces.Length; ++i)
+            {
+                await WriteToTextWriterIntlAsync(remoteTraces[i], writer, false, token).ConfigureAwait(false);
+            }
+        }
+        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
     }
     
     /// <summary>
@@ -303,7 +455,7 @@ public class StackTraceCleaner
         {
             ConsoleColor currentColor = (ConsoleColor)255;
             ConsoleColor old = Console.ForegroundColor;
-            foreach (SpanData span in EnumerateSpans(stackTrace))
+            foreach (SpanData span in EnumerateSpans(stackTrace, true))
             {
                 if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
@@ -323,7 +475,61 @@ public class StackTraceCleaner
             Console.WriteLine();
         }
         else if (!writeToConsoleBuffer) Console.WriteLine(GetString(stackTrace));
-        else WriteToTextWriterIntl(stackTrace, Console.Out);
+        else
+        {
+            TextWriter cout = Console.Out;
+            WriteToTextWriterIntl(stackTrace, cout);
+            cout.Flush();
+        }
+    }
+
+    /// <summary>
+    /// Output the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) to <see cref="Console"/> using the appropriate color format.
+    /// </summary>
+    /// <param name="exception">Exception to write.</param>
+    /// <param name="writeToConsoleBuffer">Only set this to <see langword="true"/> if memory is a huge concern, writing to the console per span takes significantly (~5x) longer than writing to a memory buffer then writing the entire buffer to the console at once.</param>
+    /// <exception cref="ArgumentNullException"></exception>
+    public void WriteToConsole(Exception exception, bool writeToConsoleBuffer = false)
+    {
+        if (exception == null)
+            throw new ArgumentNullException(nameof(exception));
+
+        if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
+        {
+            StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
+            int c = remoteTraces == null ? 0 : remoteTraces.Length;
+            for (int i = 0; i <= c; ++i)
+            {
+                StackTrace trace = i == c ? new StackTrace(exception, _config.IncludeSourceData) : remoteTraces![i];
+                ConsoleColor currentColor = (ConsoleColor)255;
+                ConsoleColor old = Console.ForegroundColor;
+                foreach (SpanData span in EnumerateSpans(trace, true))
+                {
+                    if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
+                    {
+                        ConsoleColor old2 = currentColor;
+                        currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                        if (old2 != currentColor)
+                            Console.ForegroundColor = currentColor;
+                    }
+
+                    if (span.Text != null)
+                        Console.Write(span.Text);
+                    else
+                        Console.Write(span.Char);
+                }
+                if (_config.ColorFormatting != StackColorFormatType.None)
+                    Console.ForegroundColor = old;
+                Console.WriteLine();
+            }
+        }
+        else if (!writeToConsoleBuffer) Console.WriteLine(GetString(exception));
+        else
+        {
+            TextWriter cout = Console.Out;
+            WriteToTextWriter(exception, cout);
+            cout.Flush();
+        }
     }
 
     /// <summary>
@@ -338,30 +544,78 @@ public class StackTraceCleaner
             throw new ArgumentNullException(nameof(stackTrace));
 
         WriteToTextWriterIntl(stackTrace, writer);
+        writer.Flush();
+    }
+    /// <summary>
+    /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to <paramref name="writer"/>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public void WriteToTextWriter(Exception exception, TextWriter writer)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (exception == null)
+            throw new ArgumentNullException(nameof(exception));
+        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
+        if (remoteTraces is { Length: > 0 })
+        {
+            for (int i = 0; i < remoteTraces.Length; ++i)
+            {
+                WriteToTextWriterIntl(remoteTraces[i], writer, false);
+            }
+        }
+        WriteToTextWriterIntl(stackTrace, writer, true);
+        writer.Flush();
     }
 
     /// <summary>
     /// Formats the <paramref name="stackTrace"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
     /// <exception cref="ArgumentNullException"/>
-    public Task WriteToTextWriterAsync(StackTrace stackTrace, TextWriter writer, CancellationToken token = default)
+    public async Task WriteToTextWriterAsync(StackTrace stackTrace, TextWriter writer, CancellationToken token = default)
     {
         if (writer == null)
             throw new ArgumentNullException(nameof(writer));
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
 
-        return WriteToTextWriterIntlAsync(stackTrace, writer, token, false);
+        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to <paramref name="writer"/> asynchronously.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public async Task WriteToTextWriterAsync(Exception exception, TextWriter writer, CancellationToken token = default)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (exception == null)
+            throw new ArgumentNullException(nameof(exception));
+
+        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
+        if (remoteTraces is { Length: > 0 })
+        {
+            for (int i = 0; i < remoteTraces.Length; ++i)
+            {
+                await WriteToTextWriterIntlAsync(remoteTraces[i], writer, false, token).ConfigureAwait(false);
+            }
+        }
+        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
     }
 
     /// <summary>
     /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/>.
     /// </summary>
-    private void WriteToTextWriterIntl(StackTrace trace, TextWriter writer)
+    private void WriteToTextWriterIntl(StackTrace trace, TextWriter writer, bool warnIfApplicable = true)
     {
         TokenType currentColor = (TokenType)255;
         bool div = false;
-        foreach (SpanData span in EnumerateSpans(trace))
+        foreach (SpanData span in EnumerateSpans(trace, warnIfApplicable))
         {
             if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
             {
@@ -410,12 +664,12 @@ public class StackTraceCleaner
     /// <summary>
     /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
-    private async Task WriteToTextWriterIntlAsync(StackTrace trace, TextWriter writer, CancellationToken token = default, bool dispose = true)
+    private async Task WriteToTextWriterIntlAsync(StackTrace trace, TextWriter writer, bool warnIfApplicable = true, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         TokenType currentColor = (TokenType)255;
         bool div = false;
-        foreach (SpanData span in EnumerateSpans(trace))
+        foreach (SpanData span in EnumerateSpans(trace, warnIfApplicable))
         {
             if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
             {
@@ -467,8 +721,6 @@ public class StackTraceCleaner
         // end line
         if (_writeNewline)
             await writer.WriteAsync(Environment.NewLine).ConfigureAwait(false);
-        if (dispose)
-            writer.Dispose();
     }
 
     /// <summary>
@@ -850,7 +1102,7 @@ public class StackTraceCleaner
     /// <summary>
     /// Enumerates through the spans in a <see cref="StackTrace"/>.
     /// </summary>
-    private IEnumerable<SpanData> EnumerateSpans(StackTrace trace)
+    private IEnumerable<SpanData> EnumerateSpans(StackTrace trace, bool warnIfApplicable)
     {
         if (trace.GetFrames() is not { Length: > 0 } frames)
             yield break;
@@ -897,7 +1149,7 @@ public class StackTraceCleaner
                             async = true;
                             enumerator = true;
                         }
-                        else goto next;
+                        else goto next2;
 
                         MethodInfo? originalMethod;
                         // get method from cache
@@ -918,7 +1170,7 @@ public class StackTraceCleaner
                             declType = info.DeclaringType;
                         }
                     }
-
+                    next2:
                     // try to get the method name from the comp-gen method name, last resort
                     if (Attribute.IsDefined(info, TypeCompilerGenerated))
                     {
@@ -943,7 +1195,7 @@ public class StackTraceCleaner
                     anonFunc = true;
                 }
             }
-            next:
+
             if (_writeNewline)
             {
                 // go to next line if needed and write the 'at' symbol
@@ -1189,8 +1441,8 @@ public class StackTraceCleaner
             }
             if (_writeParaTags)
                 yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
-            skip: ;
-            if (insertAfter != null)
+            skip:
+            if (frame != null && insertAfter != null)
             {
                 info = insertAfter;
                 insertAfter = null;
@@ -1200,7 +1452,7 @@ public class StackTraceCleaner
         }
 
         // lines hidden warning
-        if (hasHidden && _config.WarnForHiddenLines)
+        if (hasHidden && _config.WarnForHiddenLines && warnIfApplicable)
         {
             if (_writeParaTags)
                 yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
