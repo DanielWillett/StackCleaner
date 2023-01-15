@@ -20,6 +20,8 @@ using Color = System.Drawing.Color; // only needed when dealing with Color32Conf
 ```cs
 StackTrace stackTrace = StackTraceCleaner.GetStackTrace(exception);
 ```
+All the following methods also have an overload to print an exception's stack trace and any existing remote stack traces on Mono.
+Remote stack traces are mainly caused by a context switch in async functions.
 
 ### Write To Console
 ```cs
