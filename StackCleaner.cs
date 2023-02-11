@@ -1112,8 +1112,10 @@ public class StackTraceCleaner
         {
             StackFrame? frame = frames[f];
             MethodBase? insertAfter = null;
-            MethodBase info = frame.GetMethod();
+            MethodBase? info = frame.GetMethod();
         redo:
+            if (info == null)
+                continue;
             Type? declType = info.DeclaringType;
             bool async = false;
             bool enumerator = false;
