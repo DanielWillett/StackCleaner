@@ -1066,24 +1066,21 @@ public class StackTraceCleaner
         // cache all registered state machines and their source methods in the type's assembly.
         Type[] types = compGenType.Assembly.GetTypes();
         MethodInfo? method = null;
-        lock (CompilerGeneratedStateMachineSourceCache)
+        for (int i = 0; i < types.Length; ++i)
         {
-            for (int i = 0; i < types.Length; ++i)
+            MethodInfo[] methods = types[i].GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+            for (int j = 0; j < methods.Length; ++j)
             {
-                MethodInfo[] methods = types[i].GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
-                for (int j = 0; j < methods.Length; ++j)
+                Attribute[] attrs = Attribute.GetCustomAttributes(methods[j]);
+                for (int d = 0; d < attrs.Length; ++d)
                 {
-                    Attribute[] attrs = Attribute.GetCustomAttributes(methods[j]);
-                    for (int d = 0; d < attrs.Length; ++d)
+                    if (attrs[d] is StateMachineAttribute attr)
                     {
-                        if (attrs[d] is StateMachineAttribute attr)
-                        {
-                            if (!CompilerGeneratedStateMachineSourceCache.ContainsKey(attr.StateMachineType))
-                                CompilerGeneratedStateMachineSourceCache.Add(attr.StateMachineType, methods[j]);
-                            if (method is null && attr.StateMachineType == compGenType)
-                                method = methods[j];
-                            break;
-                        }
+                        if (!CompilerGeneratedStateMachineSourceCache.ContainsKey(attr.StateMachineType))
+                            CompilerGeneratedStateMachineSourceCache.Add(attr.StateMachineType, methods[j]);
+                        if (method is null && attr.StateMachineType == compGenType)
+                            method = methods[j];
+                        break;
                     }
                 }
             }
@@ -1114,7 +1111,8 @@ public class StackTraceCleaner
             MethodBase? insertAfter = null;
             MethodBase? info = frame.GetMethod();
         redo:
-            if (info == null)
+            // having issues with this line while in mono when not using 'is'.
+            if (info is null || info == null)
                 continue;
             Type? declType = info.DeclaringType;
             bool async = false;
@@ -1155,25 +1153,116 @@ public class StackTraceCleaner
 
                         MethodInfo? originalMethod;
                         // get method from cache
-                        lock (CompilerGeneratedStateMachineSourceCache)
+                        if (!IsMono)
                         {
-                            if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod) &&
-                                Attribute.IsDefined(declType, TypeStateMachineBase))
+                            lock (CompilerGeneratedStateMachineSourceCache)
                             {
-                                originalMethod = TryGetMethod(declType);
-                                if (originalMethod == null)
-                                    // add null value to cache so we don't keep trying to fetch it.
-                                    CompilerGeneratedStateMachineSourceCache.Add(declType, null);
+                                if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod) &&
+                                    Attribute.IsDefined(declType, TypeStateMachineBase))
+                                {
+                                    originalMethod = TryGetMethod(declType);
+                                    if (originalMethod == null)
+                                        // add null value to cache so we don't keep trying to fetch it.
+                                        CompilerGeneratedStateMachineSourceCache.Add(declType, null);
+                                }
                             }
+                        }
+                        else
+                        {
+                            originalMethod = null;
                         }
                         if (originalMethod != null)
                         {
                             info = originalMethod;
-                            declType = info.DeclaringType;
+                            if (info.DeclaringType != null)
+                                declType = info.DeclaringType;
+                        }
+                        else if (IsMono && declType.DeclaringType != null)
+                        {
+                            // backup search for method on mono because it has issues with the cache method above, search by name first
+                            string methodName = declType.Name;
+                            int ind1 = methodName.IndexOf('<');
+                            bool found = false;
+                            if (ind1 > -1)
+                            {
+                                int ind2 = methodName.IndexOf('>');
+                                if (ind2 > -1)
+                                {
+                                    found = true;
+                                    methodName = methodName.Substring(ind1 + 1, ind2 - ind1 - 1);
+                                }
+                            }
+                            if (found)
+                            {
+                                // backup search for method, search by name first ...
+                                try
+                                {
+                                    MethodInfo? info2 = declType.DeclaringType.GetMethod(methodName,
+                                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic |
+                                        BindingFlags.Static);
+                                    if (info2 is not null)
+                                    {
+                                        info = info2;
+                                        declType = info.DeclaringType;
+                                    }
+                                }
+                                catch (AmbiguousMatchException)
+                                {
+                                    try
+                                    {
+                                        // ... then by parameter types
+                                        FieldInfo[] fields = declType.DeclaringType.GetFields(BindingFlags.Instance | BindingFlags.Public);
+                                        int paramCt = 0;
+                                        bool isDefinatelyInstance = false;
+                                        // any fields not starting in (regex) '\<.*\>' must be parameters.
+                                        for (int i = 0; i < fields.Length; ++i)
+                                        {
+                                            string? name = fields[i].Name;
+                                            if (name is { Length: > 0 } && name[0] != '<')
+                                                ++paramCt;
+                                            // if theres a (regex) '\<\>\d+__this' parameter exclude static methods
+                                            else if (name is { Length: > 0 } && name.EndsWith("this"))
+                                                isDefinatelyInstance = true;
+                                        }
+
+                                        Type[] parameters = new Type[paramCt];
+                                        for (int i = fields.Length - 1; i >= 0; --i)
+                                        {
+                                            FieldInfo f2 = fields[i];
+                                            if (f2.Name is { Length: > 0 } && f2.Name[0] != '<')
+                                                parameters[--paramCt] = f2.FieldType;
+                                        }
+
+                                        MethodInfo? info2 = declType.GetMethod(methodName,
+                                            (isDefinatelyInstance ? BindingFlags.Instance : (BindingFlags.Instance | BindingFlags.Static))
+                                            | BindingFlags.NonPublic | BindingFlags.Public, null, parameters, null);
+                                        if (info2 is not null)
+                                        {
+                                            info = info2;
+                                            if (info.DeclaringType != null)
+                                                declType = info.DeclaringType;
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        // throw only in debug build
+#if DEBUG
+                                        throw;
+#endif
+                                    }
+                                }
+                                catch
+                                {
+                                    // throw only in debug build
+#if DEBUG
+                                    throw;
+#endif
+                                }
+                            }
                         }
                     }
                     next2:
-                    // try to get the method name from the comp-gen method name, last resort
+                    // try to get the method name from the comp-gen method name for anonymous (lambda) functions
                     if (Attribute.IsDefined(info, TypeCompilerGenerated))
                     {
                         anonFunc = true;
