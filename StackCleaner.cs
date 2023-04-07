@@ -928,10 +928,6 @@ public class StackTraceCleaner
         // reset console color
         if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
             writer.Write(GetANSIResetString());
-
-        // end line
-        if (_writeNewline)
-            writer.Write(Environment.NewLine);
     }
 
     /// <summary>
@@ -990,10 +986,6 @@ public class StackTraceCleaner
         if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
             await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
-
-        // end line
-        if (_writeNewline)
-            await writer.WriteAsync(Environment.NewLine).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1200,10 +1192,6 @@ public class StackTraceCleaner
         // reset console color
         if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
             writer.Write(GetANSIResetString());
-
-        // end line
-        if (_writeNewline)
-            writer.Write(Environment.NewLine);
     }
 
     /// <summary>
@@ -1262,10 +1250,6 @@ public class StackTraceCleaner
         if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
             await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
-
-        // end line
-        if (_writeNewline)
-            await writer.WriteAsync(Environment.NewLine).ConfigureAwait(false);
     }
 
     /// <summary>
