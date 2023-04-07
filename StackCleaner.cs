@@ -107,6 +107,7 @@ public class StackTraceCleaner
     private const string EndParaTagSymbol = "</p>";
     private const string GlobalSymbol = "global";
     private const string AtPrefixSymbol = " at ";
+    private const string InSymbol = "in";
     private const string LineNumberPrefixSymbol = "LN #";
     private const string ColumnNumberPrefixSymbol = "COL #";
     private const string ILOffsetPrefixSymbol = "IL";
@@ -724,6 +725,550 @@ public class StackTraceCleaner
     }
 
     /// <summary>
+    /// Formats the <paramref name="typedef"/> and returns it as a <see cref="string"/> using the runtime's default encoding.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public string GetString(Type typedef)
+    {
+        if (typedef == null)
+            throw new ArgumentNullException(nameof(typedef));
+
+        Encoding encoding = Encoding.Default;
+        using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult));
+        stream.Position = 0;
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+        WriteToTextWriterIntl(typedef, writer);
+        writer.Flush();
+        byte[] bytes = stream.GetBuffer();
+        return encoding.GetString(bytes, 0, (int)stream.Length);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="typedef"/> and writes it to <paramref name="stream"/> using <paramref name="encoding"/> to encode it.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="ArgumentException"><paramref name="stream"/> is unable to be written to.</exception>
+    public void WriteToStream(Stream stream, Type typedef, Encoding? encoding = null)
+    {
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (typedef == null)
+            throw new ArgumentNullException(nameof(typedef));
+        if (!stream.CanWrite)
+            throw new ArgumentException("Stream must be able to write.", nameof(stream));
+
+        encoding ??= Encoding.Default;
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+        WriteToTextWriterIntl(typedef, writer);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="typedef"/> and writes it to a file at <paramref name="path"/> using <paramref name="encoding"/> to encode it.<br/>
+    /// If the file exists, it'll be overwritten, otherwise it'll be created.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="IOException"/>
+    /// <exception cref="NotSupportedException"><paramref name="path"/> is not a valid writable file.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is not a valid writable file.</exception>
+    /// <exception cref="System.Security.SecurityException">Missing file access.</exception>
+    /// <exception cref="UnauthorizedAccessException">Missing file write access.</exception>
+    public void WriteToFile(string path, Type typedef, Encoding? encoding = null)
+    {
+        if (path == null)
+            throw new ArgumentNullException(nameof(path));
+        if (typedef == null)
+            throw new ArgumentNullException(nameof(typedef));
+
+
+        encoding ??= Encoding.Default;
+        using FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, encoding.GetMaxByteCount(_defBufferSizeMult));
+        WriteToStream(stream, typedef, encoding);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="typedef"/> and writes it to <paramref name="stream"/> asynchronously using <paramref name="encoding"/> to encode it.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="ArgumentException"><paramref name="stream"/> is unable to be written to.</exception>
+    public async Task WriteToStreamAsync(Stream stream, Type typedef, Encoding? encoding = null, CancellationToken token = default)
+    {
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (typedef == null)
+            throw new ArgumentNullException(nameof(typedef));
+        if (!stream.CanWrite)
+            throw new ArgumentException("Stream must be able to write.", nameof(stream));
+
+        encoding ??= Encoding.UTF8;
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+        await WriteToTextWriterIntlAsync(typedef, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Output the type definition to <see cref="Console"/> using the appropriate color format.
+    /// </summary>
+    /// <param name="typedef">Type to write.</param>
+    /// <param name="writeToConsoleBuffer">Only set this to <see langword="true"/> if memory is a huge concern, writing to the console per span takes significantly (~5x) longer than writing to a memory buffer then writing the entire buffer to the console at once.</param>
+    /// <exception cref="ArgumentNullException"></exception>
+    public void WriteToConsole(Type typedef, bool writeToConsoleBuffer = false)
+    {
+        if (typedef == null)
+            throw new ArgumentNullException(nameof(typedef));
+
+        if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
+        {
+            ConsoleColor currentColor = (ConsoleColor)255;
+            ConsoleColor old = Console.ForegroundColor;
+            foreach (SpanData span in EnumerateTypeName(typedef, true))
+            {
+                if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
+                {
+                    ConsoleColor old2 = currentColor;
+                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                    if (old2 != currentColor)
+                        Console.ForegroundColor = currentColor;
+                }
+
+                if (span.Text != null)
+                    Console.Write(span.Text);
+                else
+                    Console.Write(span.Char);
+            }
+            if (_config.ColorFormatting != StackColorFormatType.None)
+                Console.ForegroundColor = old;
+            Console.WriteLine();
+        }
+        else if (!writeToConsoleBuffer) Console.WriteLine(GetString(typedef));
+        else
+        {
+            TextWriter cout = Console.Out;
+            WriteToTextWriterIntl(typedef, cout);
+            cout.Flush();
+        }
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="typedef"/> and writes it to <paramref name="writer"/>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public void WriteToTextWriter(Type typedef, TextWriter writer)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (typedef == null)
+            throw new ArgumentNullException(nameof(typedef));
+
+        WriteToTextWriterIntl(typedef, writer);
+        writer.Flush();
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="typedef"/> and writes it to <paramref name="writer"/> asynchronously.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public async Task WriteToTextWriterAsync(Type typedef, TextWriter writer, CancellationToken token = default)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (typedef == null)
+            throw new ArgumentNullException(nameof(typedef));
+
+        await WriteToTextWriterIntlAsync(typedef, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="typedef"/> and writes it to <paramref name="writer"/>.
+    /// </summary>
+    private void WriteToTextWriterIntl(Type typedef, TextWriter writer, bool warnIfApplicable = true)
+    {
+        TokenType currentColor = (TokenType)255;
+        bool div = false;
+        foreach (SpanData span in EnumerateTypeName(typedef, warnIfApplicable))
+        {
+            if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
+            {
+                // write the outer html tag if needed
+                writer.Write(GetDivTag());
+                div = true;
+            }
+            if (currentColor != span.Color)
+            {
+                // end last color if needed
+                if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
+                    writer.Write(GetEndTag());
+
+                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                {
+                    writer.Write(GetColorString(span.Color));
+                    currentColor = span.Color;
+                }
+            }
+
+            // write string or char for span
+            if (span.Text != null)
+                writer.Write(span.Text);
+            else
+                writer.Write(span.Char);
+        }
+
+        // end last color
+        if ((int)currentColor != 255 && ShouldWriteEnd(currentColor))
+            writer.Write(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol);
+        
+        // end outer html div
+        if (div)
+            writer.Write(OuterEndHtmlTagSymbol);
+
+        // reset console color
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+            writer.Write(GetANSIResetString());
+
+        // end line
+        if (_writeNewline)
+            writer.Write(Environment.NewLine);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="typedef"/> and writes it to <paramref name="writer"/> asynchronously.
+    /// </summary>
+    private async Task WriteToTextWriterIntlAsync(Type typedef, TextWriter writer, bool warnIfApplicable = true, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        TokenType currentColor = (TokenType)255;
+        bool div = false;
+        foreach (SpanData span in EnumerateTypeName(typedef, warnIfApplicable))
+        {
+            if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
+            {
+                // write the outer html tag if needed
+                await writer.WriteAsync(GetDivTag()).ConfigureAwait(false);
+                div = true;
+                token.ThrowIfCancellationRequested();
+            }
+            if (currentColor != span.Color)
+            {
+                // end last color if needed
+                if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
+                {
+                    await writer.WriteAsync(GetEndTag()).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                }
+
+                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                {
+                    await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    currentColor = span.Color;
+                }
+            }
+
+            // write string or char for span
+            if (span.Text != null)
+                await writer.WriteAsync(span.Text).ConfigureAwait(false);
+            else
+                await writer.WriteAsync(span.Char).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+        }
+
+        // end last color
+        if ((int)currentColor != 255 && ShouldWriteEnd(currentColor))
+            await writer.WriteAsync(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+
+        // end outer html div
+        if (div)
+            writer.Write(OuterEndHtmlTagSymbol);
+
+        // reset console color
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+            await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+
+        // end line
+        if (_writeNewline)
+            await writer.WriteAsync(Environment.NewLine).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and returns it as a <see cref="string"/> using the runtime's default encoding.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public string GetString(MethodBase method)
+    {
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+
+        Encoding encoding = Encoding.Default;
+        using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult));
+        stream.Position = 0;
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+        WriteToTextWriterIntl(method, writer);
+        writer.Flush();
+        byte[] bytes = stream.GetBuffer();
+        return encoding.GetString(bytes, 0, (int)stream.Length);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and writes it to <paramref name="stream"/> using <paramref name="encoding"/> to encode it.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="ArgumentException"><paramref name="stream"/> is unable to be written to.</exception>
+    public void WriteToStream(Stream stream, MethodBase method, Encoding? encoding = null)
+    {
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+        if (!stream.CanWrite)
+            throw new ArgumentException("Stream must be able to write.", nameof(stream));
+
+        encoding ??= Encoding.Default;
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+        WriteToTextWriterIntl(method, writer);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and writes it to a file at <paramref name="path"/> using <paramref name="encoding"/> to encode it.<br/>
+    /// If the file exists, it'll be overwritten, otherwise it'll be created.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="IOException"/>
+    /// <exception cref="NotSupportedException"><paramref name="path"/> is not a valid writable file.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is not a valid writable file.</exception>
+    /// <exception cref="System.Security.SecurityException">Missing file access.</exception>
+    /// <exception cref="UnauthorizedAccessException">Missing file write access.</exception>
+    public void WriteToFile(string path, MethodBase method, Encoding? encoding = null)
+    {
+        if (path == null)
+            throw new ArgumentNullException(nameof(path));
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+
+
+        encoding ??= Encoding.Default;
+        using FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, encoding.GetMaxByteCount(_defBufferSizeMult));
+        WriteToStream(stream, method, encoding);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and writes it to <paramref name="stream"/> asynchronously using <paramref name="encoding"/> to encode it.
+    /// </summary>
+    /// <remarks>If <paramref name="encoding"/> is <see langword="null"/>, it's set to <see cref="Encoding.Default"/> instead.</remarks>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="ArgumentException"><paramref name="stream"/> is unable to be written to.</exception>
+    public async Task WriteToStreamAsync(Stream stream, MethodBase method, Encoding? encoding = null, CancellationToken token = default)
+    {
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+        if (!stream.CanWrite)
+            throw new ArgumentException("Stream must be able to write.", nameof(stream));
+
+        encoding ??= Encoding.UTF8;
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+        await WriteToTextWriterIntlAsync(method, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Output the method definition to <see cref="Console"/> using the appropriate color format.
+    /// </summary>
+    /// <param name="method">Method to write.</param>
+    /// <param name="writeToConsoleBuffer">Only set this to <see langword="true"/> if memory is a huge concern, writing to the console per span takes significantly (~5x) longer than writing to a memory buffer then writing the entire buffer to the console at once.</param>
+    /// <exception cref="ArgumentNullException"></exception>
+    public void WriteToConsole(MethodBase method, bool writeToConsoleBuffer = false)
+    {
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+
+        if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
+        {
+            ConsoleColor currentColor = (ConsoleColor)255;
+            ConsoleColor old = Console.ForegroundColor;
+            foreach (SpanData span in EnumerateMethod(method, null))
+            {
+                if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
+                {
+                    ConsoleColor old2 = currentColor;
+                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                    if (old2 != currentColor)
+                        Console.ForegroundColor = currentColor;
+                }
+
+                if (span.Text != null)
+                    Console.Write(span.Text);
+                else
+                    Console.Write(span.Char);
+            }
+            if (_config.ColorFormatting != StackColorFormatType.None)
+                Console.ForegroundColor = old;
+            Console.WriteLine();
+        }
+        else if (!writeToConsoleBuffer) Console.WriteLine(GetString(method));
+        else
+        {
+            TextWriter cout = Console.Out;
+            WriteToTextWriterIntl(method, cout);
+            cout.Flush();
+        }
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public void WriteToTextWriter(MethodBase method, TextWriter writer)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+
+        WriteToTextWriterIntl(method, writer);
+        writer.Flush();
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/> asynchronously.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"/>
+    public async Task WriteToTextWriterAsync(MethodBase method, TextWriter writer, CancellationToken token = default)
+    {
+        if (writer == null)
+            throw new ArgumentNullException(nameof(writer));
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+
+        await WriteToTextWriterIntlAsync(method, writer, true, token).ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/>.
+    /// </summary>
+    private void WriteToTextWriterIntl(MethodBase method, TextWriter writer, bool warnIfApplicable = true)
+    {
+        TokenType currentColor = (TokenType)255;
+        bool div = false;
+        foreach (SpanData span in EnumerateMethod(method, null))
+        {
+            if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
+            {
+                // write the outer html tag if needed
+                writer.Write(GetDivTag());
+                div = true;
+            }
+            if (currentColor != span.Color)
+            {
+                // end last color if needed
+                if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
+                    writer.Write(GetEndTag());
+
+                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                {
+                    writer.Write(GetColorString(span.Color));
+                    currentColor = span.Color;
+                }
+            }
+
+            // write string or char for span
+            if (span.Text != null)
+                writer.Write(span.Text);
+            else
+                writer.Write(span.Char);
+        }
+
+        // end last color
+        if ((int)currentColor != 255 && ShouldWriteEnd(currentColor))
+            writer.Write(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol);
+        
+        // end outer html div
+        if (div)
+            writer.Write(OuterEndHtmlTagSymbol);
+
+        // reset console color
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+            writer.Write(GetANSIResetString());
+
+        // end line
+        if (_writeNewline)
+            writer.Write(Environment.NewLine);
+    }
+
+    /// <summary>
+    /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/> asynchronously.
+    /// </summary>
+    private async Task WriteToTextWriterIntlAsync(MethodBase method, TextWriter writer, bool warnIfApplicable = true, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        TokenType currentColor = (TokenType)255;
+        bool div = false;
+        foreach (SpanData span in EnumerateMethod(method, null))
+        {
+            if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
+            {
+                // write the outer html tag if needed
+                await writer.WriteAsync(GetDivTag()).ConfigureAwait(false);
+                div = true;
+                token.ThrowIfCancellationRequested();
+            }
+            if (currentColor != span.Color)
+            {
+                // end last color if needed
+                if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
+                {
+                    await writer.WriteAsync(GetEndTag()).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                }
+
+                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                {
+                    await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    currentColor = span.Color;
+                }
+            }
+
+            // write string or char for span
+            if (span.Text != null)
+                await writer.WriteAsync(span.Text).ConfigureAwait(false);
+            else
+                await writer.WriteAsync(span.Char).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+        }
+
+        // end last color
+        if ((int)currentColor != 255 && ShouldWriteEnd(currentColor))
+            await writer.WriteAsync(_config.ColorFormatting == StackColorFormatType.UnityRichText ? UnityEndColorSymbol : HtmlEndSpanSymbol).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+
+        // end outer html div
+        if (div)
+            writer.Write(OuterEndHtmlTagSymbol);
+
+        // reset console color
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+            await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+
+        // end line
+        if (_writeNewline)
+            await writer.WriteAsync(Environment.NewLine).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Converts a 'primitive' type to it's corresponding keyword (void, int, string, etc.)
     /// </summary>
     private static string? GetKeyword(Type type)
@@ -1110,15 +1655,13 @@ public class StackTraceCleaner
             StackFrame? frame = frames[f];
             MethodBase? insertAfter = null;
             MethodBase? info = frame.GetMethod();
+            Type? declType = info.DeclaringType;
         redo:
             // having issues with this line while in mono when not using 'is'.
             if (info is null || info == null)
                 continue;
-            Type? declType = info.DeclaringType;
-            bool async = false;
-            bool enumerator = false;
-            bool anonFunc = false;
-            if (declType is not null)
+
+            if (declType != null)
             {
                 // if the type is hidden, continue.
                 foreach (Type type in _config.GetHiddenTypes())
@@ -1129,164 +1672,7 @@ public class StackTraceCleaner
                         goto skip;
                     }
                 }
-                // determine whether or not the method is part of a compiler-generated state machine (will always be private and named 'MoveNext').
-                if (info.IsPrivate && info.Name.Equals(nameof(IEnumerator.MoveNext), StringComparison.Ordinal))
-                {
-                    if (Attribute.IsDefined(declType, TypeCompilerGenerated))
-                    {
-                        // test for various compiler-generated state machines
-                        if (typeof(IAsyncStateMachine).IsAssignableFrom(declType))
-                        {
-                            async = true;
-                        }
-                        else if (typeof(IEnumerator).IsAssignableFrom(declType))
-                        {
-                            enumerator = true;
-                        }
-                        // external reference required for a typeof operation, string comparison works okay
-                        else if (declType.GetInterfaces().Any(x => x.IsGenericType && x.Name.StartsWith("IAsyncEnumerator", StringComparison.Ordinal)))
-                        {
-                            async = true;
-                            enumerator = true;
-                        }
-                        else goto next2;
-
-                        MethodInfo? originalMethod;
-                        // get method from cache
-                        if (!IsMono)
-                        {
-                            lock (CompilerGeneratedStateMachineSourceCache)
-                            {
-                                if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod) &&
-                                    Attribute.IsDefined(declType, TypeStateMachineBase))
-                                {
-                                    originalMethod = TryGetMethod(declType);
-                                    if (originalMethod == null)
-                                        // add null value to cache so we don't keep trying to fetch it.
-                                        CompilerGeneratedStateMachineSourceCache.Add(declType, null);
-                                }
-                            }
-                        }
-                        else
-                        {
-                            originalMethod = null;
-                        }
-                        if (originalMethod != null)
-                        {
-                            info = originalMethod;
-                            if (info.DeclaringType != null)
-                                declType = info.DeclaringType;
-                        }
-                        else if (IsMono && declType.DeclaringType != null)
-                        {
-                            // backup search for method on mono because it has issues with the cache method above, search by name first
-                            string methodName = declType.Name;
-                            int ind1 = methodName.IndexOf('<');
-                            bool found = false;
-                            if (ind1 > -1)
-                            {
-                                int ind2 = methodName.IndexOf('>');
-                                if (ind2 > -1)
-                                {
-                                    found = true;
-                                    methodName = methodName.Substring(ind1 + 1, ind2 - ind1 - 1);
-                                }
-                            }
-                            if (found)
-                            {
-                                // backup search for method, search by name first ...
-                                try
-                                {
-                                    MethodInfo? info2 = declType.DeclaringType.GetMethod(methodName,
-                                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic |
-                                        BindingFlags.Static);
-                                    if (info2 is not null)
-                                    {
-                                        info = info2;
-                                        declType = info.DeclaringType;
-                                    }
-                                }
-                                catch (AmbiguousMatchException)
-                                {
-                                    try
-                                    {
-                                        // ... then by parameter types
-                                        FieldInfo[] fields = declType.DeclaringType.GetFields(BindingFlags.Instance | BindingFlags.Public);
-                                        int paramCt = 0;
-                                        bool isDefinatelyInstance = false;
-                                        // any fields not starting in (regex) '\<.*\>' must be parameters.
-                                        for (int i = 0; i < fields.Length; ++i)
-                                        {
-                                            string? name = fields[i].Name;
-                                            if (name is { Length: > 0 } && name[0] != '<')
-                                                ++paramCt;
-                                            // if theres a (regex) '\<\>\d+__this' parameter exclude static methods
-                                            else if (name is { Length: > 0 } && name.EndsWith("this"))
-                                                isDefinatelyInstance = true;
-                                        }
-
-                                        Type[] parameters = new Type[paramCt];
-                                        for (int i = fields.Length - 1; i >= 0; --i)
-                                        {
-                                            FieldInfo f2 = fields[i];
-                                            if (f2.Name is { Length: > 0 } && f2.Name[0] != '<')
-                                                parameters[--paramCt] = f2.FieldType;
-                                        }
-
-                                        MethodInfo? info2 = declType.GetMethod(methodName,
-                                            (isDefinatelyInstance ? BindingFlags.Instance : (BindingFlags.Instance | BindingFlags.Static))
-                                            | BindingFlags.NonPublic | BindingFlags.Public, null, parameters, null);
-                                        if (info2 is not null)
-                                        {
-                                            info = info2;
-                                            if (info.DeclaringType != null)
-                                                declType = info.DeclaringType;
-                                        }
-                                    }
-                                    catch
-                                    {
-                                        // throw only in debug build
-#if DEBUG
-                                        throw;
-#endif
-                                    }
-                                }
-                                catch
-                                {
-                                    // throw only in debug build
-#if DEBUG
-                                    throw;
-#endif
-                                }
-                            }
-                        }
-                    }
-                    next2:
-                    // try to get the method name from the comp-gen method name for anonymous (lambda) functions
-                    if (Attribute.IsDefined(info, TypeCompilerGenerated))
-                    {
-                        anonFunc = true;
-                        string name = info.Name;
-                        int st = name.IndexOf('<') + 1;
-                        int end = name.IndexOf('>');
-                        if (st > 0 && end > 2)
-                        {
-                            string methodname = name.Substring(st, end - st);
-
-                            // avoids an ambiguous match error
-                            insertAfter = declType?.GetMethods(BindingFlags.Instance | BindingFlags.Static
-                                | BindingFlags.NonPublic | BindingFlags.Public)
-                                .FirstOrDefault(x => x.Name.Equals(methodname, StringComparison.Ordinal));
-                        }
-                    }
-                }
-                // determine whether the method is a compiler-generated anonymous method (lambda, in-line delegate, etc) replacement.
-                else if (declType.IsSealed && Attribute.IsDefined(declType, TypeCompilerGenerated))
-                {
-                    anonFunc = true;
-                }
             }
-
             if (_writeNewline)
             {
                 // go to next line if needed and write the 'at' symbol
@@ -1307,176 +1693,13 @@ public class StackTraceCleaner
                 yield return new SpanData(AtPrefixSymbol, TokenType.FlowKeyword);
                 hasSentOne = true;
             }
-            bool isPropAccessor = false;
 
-            // constructors will be null here
-            MethodInfo? method2 = info as MethodInfo;
-            if (!anonFunc)
+            MethodInfoContainer container = new MethodInfoContainer();
+            foreach (SpanData data in EnumerateMethod(info, container))
             {
-                if (info.IsStatic) // static keyword
-                    yield return new SpanData(StaticSymbol + SpaceSymbolStr, TokenType.Keyword);
-
-                if (async) // async keyword
-                    yield return new SpanData(AsyncSymbol + SpaceSymbolStr, TokenType.Keyword);
-
-                if (enumerator) // enumerator 'keyword'
-                    yield return new SpanData(EnumeratorSymbol + SpaceSymbolStr, TokenType.Keyword);
-
-                if (info.IsSpecialName)
-                {
-                    // Check if the method is a property accessor.
-                    // This is the fastest way (compared to looping through all properties in the current class and comparing their accessor methods).
-                    if (info.Name.StartsWith("get_", StringComparison.Ordinal))
-                    {
-                        isPropAccessor = true;
-                        yield return new SpanData(GetterSymbol + SpaceSymbolStr, TokenType.Keyword);
-                    }
-                    else if (info.Name.StartsWith("set_", StringComparison.Ordinal))
-                    {
-                        isPropAccessor = true;
-                        yield return new SpanData(SetterSymbol + SpaceSymbolStr, TokenType.Keyword);
-                    }
-                }
-
-                // return type
-                if (method2 != null)
-                {
-                    foreach (SpanData d in EnumerateTypeName(method2.ReturnType))
-                        yield return d;
-                    yield return new SpanData(SpaceSymbol, TokenType.Space);
-                }
-                bool dot = false;
-                if (_config.IncludeNamespaces)
-                {
-                    string? ns = declType?.Namespace;
-                    if (string.IsNullOrEmpty(ns))
-                    {
-                        // global namespace
-                        yield return new SpanData(GlobalSymbol, TokenType.Keyword);
-                        yield return new SpanData(GlobalSeparatorSymbol, TokenType.Punctuation);
-                    }
-                    else
-                    {
-                        dot = true;
-                        if (_config.ColorFormatting != StackColorFormatType.None)
-                        {
-                            // split namespace and add in color formatting where needed
-                            int index = -1;
-                            int lastIndex = -1;
-                            while (true)
-                            {
-                                index = ns!.IndexOf(MemberSeparatorSymbol, index + 1);
-                                if (index == -1) break;
-                                if (lastIndex > 0)
-                                {
-                                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                                }
-                                if (index >= ns.Length - 1) break;
-                                yield return new SpanData(ns.Substring(lastIndex + 1, index - lastIndex - 1), TokenType.Namespace);
-                                lastIndex = index;
-                            }
-
-                            if (lastIndex < ns.Length - 1)
-                            {
-                                if (lastIndex > 0)
-                                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                                yield return new SpanData(ns.Substring(lastIndex + 1, ns.Length - lastIndex - 1), TokenType.Namespace);
-                            }
-                        }
-                        // send whole namespace at once since splitting isn't needed
-                        else yield return new SpanData(ns!, TokenType.Space);
-                    }
-                }
-                if (declType != null)
-                {
-                    if (dot) // will be false for a global namespace
-                        yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                    foreach (SpanData d in EnumerateTypeName(declType))
-                        yield return d;
-                }
-                if (info is not ConstructorInfo) // constructors can not be generic and will not have a (useful) method name.
-                {
-                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                    yield return new SpanData(!isPropAccessor || info.Name.Length < 5 ? info.Name : info.Name.Substring(4),
-                        isPropAccessor ? TokenType.Property : TokenType.Method);
-
-                    if (method2 != null &&
-                        (method2.IsGenericMethod || method2.IsGenericMethodDefinition) &&
-                        method2.GetGenericArguments() is { Length: > 0 } gens)
-                    {
-                        yield return new SpanData(GenericOpenSymbol, TokenType.Punctuation);
-                        for (int i = 0; i < gens.Length; i++)
-                        {
-                            if (i != 0)
-                            {
-                                yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
-                            }
-
-                            foreach (SpanData d in EnumerateTypeName(gens[i]))
-                                yield return d;
-                        }
-                        yield return new SpanData(GenericCloseSymbol, TokenType.Punctuation);
-                    }
-                }
+                yield return data;
             }
-            else
-            {
-                // display anonymous signature in lambda format.
-                yield return new SpanData(AnonymousSymbol + SpaceSymbolStr, TokenType.Keyword);
-                if (method2 != null)
-                {
-                    foreach (SpanData d in EnumerateTypeName(method2.ReturnType))
-                        yield return d;
-                    yield return new SpanData(SpaceSymbol, TokenType.Space);
-                }
-                if (async)
-                {
-                    yield return new SpanData(AsyncSymbol, TokenType.Keyword);
-                    yield return new SpanData(SpaceSymbol, TokenType.Space);
-                }
-            }
-
-            // property accessors will always have the same arguemnts, no need to display them.
-            if (!isPropAccessor)
-            {
-                ParameterInfo[] parameters = info.GetParameters();
-                if (parameters.Length > 0)
-                {
-                    yield return new SpanData(ParametersOpenSymbol, TokenType.Punctuation);
-                    for (int i = 0; i < parameters.Length; ++i)
-                    {
-                        ParameterInfo p = parameters[i];
-                        if (i != 0)
-                        {
-                            yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
-                        }
-
-                        // only check for params if the last parameter is an array
-                        if (i == parameters.Length - 1 && p.ParameterType.IsArray && Attribute.IsDefined(p, typeof(ParamArrayAttribute)))
-                        {
-                            yield return new SpanData(ParamsSymbol + SpaceSymbolStr, TokenType.Keyword);
-                        }
-
-                        foreach (SpanData d in EnumerateTypeName(p.ParameterType, isOut: p.IsOut))
-                            yield return d;
-                        if (p.Name != null)
-                            yield return new SpanData(SpaceSymbolStr + p.Name, TokenType.Parameter);
-                    }
-                    yield return new SpanData(ParametersCloseSymbol, TokenType.Punctuation);
-                }
-                else
-                    // a char has to be converted to a string so it doesn't perform integer addition
-                    yield return new SpanData(new string(ParametersOpenSymbol, 1) + ParametersCloseSymbol, TokenType.Punctuation);
-            }
-
-            if (anonFunc)
-            {
-                // "=> { ... }"
-                yield return new SpanData(SpaceSymbolStr + LambdaSymbol + SpaceSymbolStr, TokenType.Method);
-                yield return new SpanData(MethodBodyOpenSymbol, TokenType.Punctuation);
-                yield return new SpanData(SpaceSymbolStr + HiddenMethodContentSymbol + SpaceSymbolStr, TokenType.ExtraData);
-                yield return new SpanData(MethodBodyCloseSymbol, TokenType.Punctuation);
-            }
+            insertAfter = container.InsertAfter;
 
             string ed = string.Empty;
             // source data (line, column number, IL offset, file)
@@ -1527,7 +1750,7 @@ public class StackTraceCleaner
                         yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
                         yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
                     }
-                    yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.Space);
+                    yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.ExtraData);
                 }
             }
             if (_writeParaTags)
@@ -1553,6 +1776,10 @@ public class StackTraceCleaner
         }
     }
 
+    private class MethodInfoContainer
+    {
+        public MethodBase? InsertAfter { get; set; }
+    }
     /// <summary>
     /// Enumerates through the spans in a type name declaration.
     /// </summary>
@@ -1644,6 +1871,354 @@ public class StackTraceCleaner
             }
             else
                 yield return new SpanData(type.Name, GetTypeColor(type));
+        }
+    }
+    private IEnumerable<SpanData> EnumerateMethod(MethodBase info, MethodInfoContainer? container)
+    {
+        redo:
+        bool isPropAccessor = false;
+        Type? declType = info.DeclaringType;
+        bool async = false;
+        bool enumerator = false;
+        bool anonFunc = false;
+        MethodBase? containerMethod = null;
+        if (declType is not null)
+        {
+            // determine whether or not the method is part of a compiler-generated state machine (will always be private and named 'MoveNext').
+            if (info.IsPrivate && info.Name.Equals(nameof(IEnumerator.MoveNext), StringComparison.Ordinal))
+            {
+                if (Attribute.IsDefined(declType, TypeCompilerGenerated))
+                {
+                    // test for various compiler-generated state machines
+                    if (typeof(IAsyncStateMachine).IsAssignableFrom(declType))
+                    {
+                        async = true;
+                    }
+                    else if (typeof(IEnumerator).IsAssignableFrom(declType))
+                    {
+                        enumerator = true;
+                    }
+                    // external reference required for a typeof operation, string comparison works okay
+                    else if (declType.GetInterfaces().Any(x => x.IsGenericType && x.Name.StartsWith("IAsyncEnumerator", StringComparison.Ordinal)))
+                    {
+                        async = true;
+                        enumerator = true;
+                    }
+                    else goto next2;
+
+                    MethodInfo? originalMethod;
+                    // get method from cache
+                    if (!IsMono)
+                    {
+                        lock (CompilerGeneratedStateMachineSourceCache)
+                        {
+                            if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod))
+                            {
+                                originalMethod = TryGetMethod(declType);
+                                if (originalMethod == null)
+                                    // add null value to cache so we don't keep trying to fetch it.
+                                    CompilerGeneratedStateMachineSourceCache.Add(declType, null);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        originalMethod = null;
+                    }
+                    if (originalMethod != null)
+                    {
+                        info = originalMethod;
+                        if (info.DeclaringType != null)
+                            declType = info.DeclaringType;
+                    }
+                    else if (IsMono && declType.DeclaringType != null)
+                    {
+                        // backup search for method on mono because it has issues with the cache method above, search by name first
+                        string methodName = declType.Name;
+                        int ind1 = methodName.IndexOf('<');
+                        bool found = false;
+                        if (ind1 > -1)
+                        {
+                            int ind2 = methodName.IndexOf('>');
+                            if (ind2 > -1)
+                            {
+                                found = true;
+                                methodName = methodName.Substring(ind1 + 1, ind2 - ind1 - 1);
+                            }
+                        }
+                        if (found)
+                        {
+                            // backup search for method, search by name first ...
+                            try
+                            {
+                                MethodInfo? info2 = declType.DeclaringType.GetMethod(methodName,
+                                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic |
+                                    BindingFlags.Static);
+                                if (info2 is not null)
+                                {
+                                    info = info2;
+                                    declType = info.DeclaringType;
+                                }
+                            }
+                            catch (AmbiguousMatchException)
+                            {
+                                try
+                                {
+                                    // ... then by parameter types
+                                    FieldInfo[] fields = declType!.DeclaringType!.GetFields(BindingFlags.Instance | BindingFlags.Public);
+                                    int paramCt = 0;
+                                    bool isDefinatelyInstance = false;
+                                    // any fields not starting in (regex) '\<.*\>' must be parameters.
+                                    for (int i = 0; i < fields.Length; ++i)
+                                    {
+                                        string? name = fields[i].Name;
+                                        if (name is { Length: > 0 } && name[0] != '<')
+                                            ++paramCt;
+                                        // if theres a (regex) '\<\>\d+__this' parameter exclude static methods
+                                        else if (name is { Length: > 0 } && name.EndsWith("this"))
+                                            isDefinatelyInstance = true;
+                                    }
+
+                                    Type[] parameters = new Type[paramCt];
+                                    for (int i = fields.Length - 1; i >= 0; --i)
+                                    {
+                                        FieldInfo f2 = fields[i];
+                                        if (f2.Name is { Length: > 0 } && f2.Name[0] != '<')
+                                            parameters[--paramCt] = f2.FieldType;
+                                    }
+
+                                    MethodInfo? info2 = declType.GetMethod(methodName,
+                                        (isDefinatelyInstance ? BindingFlags.Instance : (BindingFlags.Instance | BindingFlags.Static))
+                                        | BindingFlags.NonPublic | BindingFlags.Public, null, parameters, null);
+                                    if (info2 is not null)
+                                    {
+                                        info = info2;
+                                        if (info.DeclaringType != null)
+                                            declType = info.DeclaringType;
+                                    }
+                                }
+                                catch
+                                {
+                                    // throw only in debug build
+#if DEBUG
+                                        throw;
+#endif
+                                }
+                            }
+                            catch
+                            {
+                                // throw only in debug build
+#if DEBUG
+                                    throw;
+#endif
+                            }
+                        }
+                    }
+                }
+                next2:
+                // try to get the method name from the comp-gen method name for anonymous (lambda) functions
+                if (Attribute.IsDefined(info, TypeCompilerGenerated))
+                {
+                    anonFunc = true;
+                    string name = info.Name;
+                    int st = name.IndexOf('<') + 1;
+                    int end = name.IndexOf('>');
+                    if (st > 0 && end > 2)
+                    {
+                        string methodname = name.Substring(st, end - st);
+
+                        // avoids an ambiguous match error
+                        containerMethod = declType?.GetMethods(BindingFlags.Instance | BindingFlags.Static
+                                | BindingFlags.NonPublic | BindingFlags.Public)
+                            .FirstOrDefault(x => x.Name.Equals(methodname, StringComparison.Ordinal));
+
+                        if (container != null)
+                        {
+                            container.InsertAfter = containerMethod;
+                            containerMethod = null;
+                        }
+                    }
+                }
+            }
+            // determine whether the method is a compiler-generated anonymous method (lambda, in-line delegate, etc) replacement.
+            else if (declType.IsSealed && Attribute.IsDefined(declType, TypeCompilerGenerated))
+            {
+                anonFunc = true;
+            }
+        }
+        // constructors will be null here
+        MethodInfo? method2 = info as MethodInfo;
+        if (!anonFunc)
+        {
+            if (info.IsStatic) // static keyword
+                yield return new SpanData(StaticSymbol + SpaceSymbolStr, TokenType.Keyword);
+
+            if (async) // async keyword
+                yield return new SpanData(AsyncSymbol + SpaceSymbolStr, TokenType.Keyword);
+
+            if (enumerator) // enumerator 'keyword'
+                yield return new SpanData(EnumeratorSymbol + SpaceSymbolStr, TokenType.Keyword);
+
+            if (info.IsSpecialName)
+            {
+                // Check if the method is a property accessor.
+                // This is the fastest way (compared to looping through all properties in the current class and comparing their accessor methods).
+                if (info.Name.StartsWith("get_", StringComparison.Ordinal))
+                {
+                    isPropAccessor = true;
+                    yield return new SpanData(GetterSymbol + SpaceSymbolStr, TokenType.Keyword);
+                }
+                else if (info.Name.StartsWith("set_", StringComparison.Ordinal))
+                {
+                    isPropAccessor = true;
+                    yield return new SpanData(SetterSymbol + SpaceSymbolStr, TokenType.Keyword);
+                }
+            }
+
+            // return type
+            if (method2 != null)
+            {
+                foreach (SpanData d in EnumerateTypeName(method2.ReturnType))
+                    yield return d;
+                yield return new SpanData(SpaceSymbol, TokenType.Space);
+            }
+            bool dot = false;
+            if (_config.IncludeNamespaces)
+            {
+                string? ns = declType?.Namespace;
+                if (string.IsNullOrEmpty(ns))
+                {
+                    // global namespace
+                    yield return new SpanData(GlobalSymbol, TokenType.Keyword);
+                    yield return new SpanData(GlobalSeparatorSymbol, TokenType.Punctuation);
+                }
+                else
+                {
+                    dot = true;
+                    if (_config.ColorFormatting != StackColorFormatType.None)
+                    {
+                        // split namespace and add in color formatting where needed
+                        int index = -1;
+                        int lastIndex = -1;
+                        while (true)
+                        {
+                            index = ns!.IndexOf(MemberSeparatorSymbol, index + 1);
+                            if (index == -1) break;
+                            if (lastIndex > 0)
+                            {
+                                yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                            }
+                            if (index >= ns.Length - 1) break;
+                            yield return new SpanData(ns.Substring(lastIndex + 1, index - lastIndex - 1), TokenType.Namespace);
+                            lastIndex = index;
+                        }
+
+                        if (lastIndex < ns.Length - 1)
+                        {
+                            if (lastIndex > 0)
+                                yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                            yield return new SpanData(ns.Substring(lastIndex + 1, ns.Length - lastIndex - 1), TokenType.Namespace);
+                        }
+                    }
+                    // send whole namespace at once since splitting isn't needed
+                    else yield return new SpanData(ns!, TokenType.Space);
+                }
+            }
+            if (declType != null)
+            {
+                if (dot) // will be false for a global namespace
+                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                foreach (SpanData d in EnumerateTypeName(declType))
+                    yield return d;
+            }
+            if (info is not ConstructorInfo) // constructors can not be generic and will not have a (useful) method name.
+            {
+                yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                yield return new SpanData(!isPropAccessor || info.Name.Length < 5 ? info.Name : info.Name.Substring(4),
+                    isPropAccessor ? TokenType.Property : TokenType.Method);
+
+                if (method2 != null &&
+                    (method2.IsGenericMethod || method2.IsGenericMethodDefinition) &&
+                    method2.GetGenericArguments() is { Length: > 0 } gens)
+                {
+                    yield return new SpanData(GenericOpenSymbol, TokenType.Punctuation);
+                    for (int i = 0; i < gens.Length; i++)
+                    {
+                        if (i != 0)
+                        {
+                            yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
+                        }
+
+                        foreach (SpanData d in EnumerateTypeName(gens[i]))
+                            yield return d;
+                    }
+                    yield return new SpanData(GenericCloseSymbol, TokenType.Punctuation);
+                }
+            }
+        }
+        else
+        {
+            // display anonymous signature in lambda format.
+            yield return new SpanData(AnonymousSymbol + SpaceSymbolStr, TokenType.Keyword);
+            if (method2 != null)
+            {
+                foreach (SpanData d in EnumerateTypeName(method2.ReturnType))
+                    yield return d;
+                yield return new SpanData(SpaceSymbol, TokenType.Space);
+            }
+            if (async)
+            {
+                yield return new SpanData(AsyncSymbol, TokenType.Keyword);
+                yield return new SpanData(SpaceSymbol, TokenType.Space);
+            }
+        }
+
+        // property accessors will always have the same arguemnts, no need to display them.
+        if (!isPropAccessor)
+        {
+            ParameterInfo[] parameters = info.GetParameters();
+            if (parameters.Length > 0)
+            {
+                yield return new SpanData(ParametersOpenSymbol, TokenType.Punctuation);
+                for (int i = 0; i < parameters.Length; ++i)
+                {
+                    ParameterInfo p = parameters[i];
+                    if (i != 0)
+                    {
+                        yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
+                    }
+
+                    // only check for params if the last parameter is an array
+                    if (i == parameters.Length - 1 && p.ParameterType.IsArray && Attribute.IsDefined(p, typeof(ParamArrayAttribute)))
+                    {
+                        yield return new SpanData(ParamsSymbol + SpaceSymbolStr, TokenType.Keyword);
+                    }
+
+                    foreach (SpanData d in EnumerateTypeName(p.ParameterType, isOut: p.IsOut))
+                        yield return d;
+                    if (p.Name != null)
+                        yield return new SpanData(SpaceSymbolStr + p.Name, TokenType.Parameter);
+                }
+                yield return new SpanData(ParametersCloseSymbol, TokenType.Punctuation);
+            }
+            else
+                // a char has to be converted to a string so it doesn't perform integer addition
+                yield return new SpanData(new string(ParametersOpenSymbol, 1) + ParametersCloseSymbol, TokenType.Punctuation);
+        }
+
+        if (anonFunc)
+        {
+            // "=> { ... }"
+            yield return new SpanData(SpaceSymbolStr + LambdaSymbol + SpaceSymbolStr, TokenType.Method);
+            yield return new SpanData(MethodBodyOpenSymbol, TokenType.Punctuation);
+            yield return new SpanData(SpaceSymbolStr + HiddenMethodContentSymbol + SpaceSymbolStr, TokenType.ExtraData);
+            yield return new SpanData(MethodBodyCloseSymbol, TokenType.Punctuation);
+            if (containerMethod != null)
+            {
+                yield return new SpanData(SpaceSymbolStr + InSymbol + SpaceSymbolStr, TokenType.FlowKeyword);
+                info = containerMethod;
+                goto redo;
+            }
         }
     }
     private readonly struct SpanData
