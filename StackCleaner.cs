@@ -78,6 +78,8 @@ public class StackTraceCleaner
     private const char GenericCloseSymbol = '>';
     private const char ParametersOpenSymbol = '(';
     private const char ParametersCloseSymbol = ')';
+    private const char IndexerParametersOpenSymbol = '[';
+    private const char IndexerParametersCloseSymbol = ']';
     private const char MethodBodyOpenSymbol = '{';
     private const char MethodBodyCloseSymbol = '}';
     private const char ArrayOpenSymbol = '[';
@@ -88,6 +90,7 @@ public class StackTraceCleaner
     private const string GlobalSeparatorSymbol = "::";
     private const string LambdaSymbol = "=>";
     private const string HiddenMethodContentSymbol = "...";
+    private const string NullSymbol = "null";
     private const string RefSymbol = "ref";
     private const string OutSymbol = "out";
     private const string ParamsSymbol = "params";
@@ -1637,6 +1640,7 @@ public class StackTraceCleaner
         for (int f = 0; f < frames.Length; ++f)
         {
             StackFrame? frame = frames[f];
+            if (frame == null) continue;
             MethodBase? insertAfter = null;
             MethodBase? info = frame.GetMethod();
             Type? declType = info.DeclaringType;
@@ -1740,7 +1744,7 @@ public class StackTraceCleaner
             if (_writeParaTags)
                 yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
             skip:
-            if (frame != null && insertAfter != null)
+            if (frame != null && insertAfter is not null && insertAfter != null)
             {
                 info = insertAfter;
                 insertAfter = null;
@@ -1773,6 +1777,11 @@ public class StackTraceCleaner
     /// <param name="isOut">For parameter declarations, replaces <see langword="ref"/> with <see langword="out"/> in byref types.</param>
     private IEnumerable<SpanData> EnumerateTypeName(Type type, bool isOut = false)
     {
+        if (type is null || type == null)
+        {
+            yield return new SpanData(NullSymbol, TokenType.Keyword);
+            yield break;
+        }
         if (_config.UseTypeAliases && GetKeyword(type) is { } rtnName)
         {
             // get type alias (void, int, string, etc)
@@ -1866,10 +1875,10 @@ public class StackTraceCleaner
         bool enumerator = false;
         bool anonFunc = false;
         MethodBase? containerMethod = null;
-        if (declType is not null)
+        if (declType is not null && declType != null)
         {
             // determine whether or not the method is part of a compiler-generated state machine (will always be private and named 'MoveNext').
-            if (info.IsPrivate && info.Name.Equals(nameof(IEnumerator.MoveNext), StringComparison.Ordinal))
+            if (info.IsPrivate && info.Name != null && info.Name.Equals(nameof(IEnumerator.MoveNext), StringComparison.Ordinal))
             {
                 if (Attribute.IsDefined(declType, TypeCompilerGenerated))
                 {
@@ -2043,7 +2052,7 @@ public class StackTraceCleaner
             if (enumerator) // enumerator 'keyword'
                 yield return new SpanData(EnumeratorSymbol + SpaceSymbolStr, TokenType.Keyword);
 
-            if (info.IsSpecialName)
+            if (info.IsSpecialName && info.Name != null)
             {
                 // Check if the method is a property accessor.
                 // This is the fastest way (compared to looping through all properties in the current class and comparing their accessor methods).
@@ -2060,7 +2069,7 @@ public class StackTraceCleaner
             }
 
             // return type
-            if (method2 != null)
+            if (method2 != null && method2.ReturnType != null)
             {
                 foreach (SpanData d in EnumerateTypeName(method2.ReturnType))
                     yield return d;
@@ -2117,26 +2126,73 @@ public class StackTraceCleaner
             }
             if (info is not ConstructorInfo) // constructors can not be generic and will not have a (useful) method name.
             {
-                yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                yield return new SpanData(!isPropAccessor || info.Name.Length < 5 ? info.Name : info.Name.Substring(4),
-                    isPropAccessor ? TokenType.Property : TokenType.Method);
-
-                if (method2 != null &&
-                    (method2.IsGenericMethod || method2.IsGenericMethodDefinition) &&
-                    method2.GetGenericArguments() is { Length: > 0 } gens)
+                // indexer
+                PropertyInfo? indexer = null;
+                if (isPropAccessor && info.Name is { Length: 8 } && info.Name.EndsWith("Item", StringComparison.Ordinal))
                 {
-                    yield return new SpanData(GenericOpenSymbol, TokenType.Punctuation);
-                    for (int i = 0; i < gens.Length; i++)
+                    try
                     {
-                        if (i != 0)
-                        {
-                            yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
-                        }
-
-                        foreach (SpanData d in EnumerateTypeName(gens[i]))
-                            yield return d;
+                        indexer = declType?.GetProperty("Item", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     }
-                    yield return new SpanData(GenericCloseSymbol, TokenType.Punctuation);
+                    catch
+                    {
+                        // ignored
+                    }
+                    if (indexer != null && indexer.GetIndexParameters() is { Length: > 0 } indexParams)
+                    {
+                        // is an indexer.
+                        if (indexParams.Length > 0)
+                        {
+                            yield return new SpanData(IndexerParametersOpenSymbol, TokenType.Punctuation);
+                            for (int i = 0; i < indexParams.Length; ++i)
+                            {
+                                ParameterInfo p = indexParams[i];
+                                if (i != 0)
+                                {
+                                    yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
+                                }
+
+                                // only check for params if the last parameter is an array
+                                if (i == indexParams.Length - 1 && p.ParameterType.IsArray && Attribute.IsDefined(p, typeof(ParamArrayAttribute)))
+                                {
+                                    yield return new SpanData(ParamsSymbol + SpaceSymbolStr, TokenType.Keyword);
+                                }
+
+                                foreach (SpanData d in EnumerateTypeName(p.ParameterType, isOut: p.IsOut))
+                                    yield return d;
+                                if (p.Name != null)
+                                    yield return new SpanData(SpaceSymbolStr + p.Name, TokenType.Parameter);
+                            }
+                            yield return new SpanData(IndexerParametersCloseSymbol, TokenType.Punctuation);
+                        }
+                        else
+                            yield return new SpanData(new string(IndexerParametersOpenSymbol, 1) + IndexerParametersCloseSymbol, TokenType.Punctuation);
+                    }
+                    else indexer = null;
+                }
+                if (indexer == null)
+                {
+                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                    yield return new SpanData(!isPropAccessor || info.Name.Length < 5 ? info.Name : info.Name.Substring(4),
+                        isPropAccessor ? TokenType.Property : TokenType.Method);
+
+                    if (method2 != null &&
+                        (method2.IsGenericMethod || method2.IsGenericMethodDefinition) &&
+                        method2.GetGenericArguments() is { Length: > 0 } gens)
+                    {
+                        yield return new SpanData(GenericOpenSymbol, TokenType.Punctuation);
+                        for (int i = 0; i < gens.Length; i++)
+                        {
+                            if (i != 0)
+                            {
+                                yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
+                            }
+
+                            foreach (SpanData d in EnumerateTypeName(gens[i]))
+                                yield return d;
+                        }
+                        yield return new SpanData(GenericCloseSymbol, TokenType.Punctuation);
+                    }
                 }
             }
         }
