@@ -1,8 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿#if NETFRAMEWORK || NETSTANDARD
+using System;
 using UnityEngine;
 namespace StackCleaner;
 
@@ -300,3 +297,4 @@ public sealed class UnityColor32Config : ColorConfig
                (byte)Math.Min(255, Mathf.RoundToInt(color.b * 255));
     }
 }
+#endif

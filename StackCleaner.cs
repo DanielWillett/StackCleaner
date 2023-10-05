@@ -1643,6 +1643,7 @@ public class StackTraceCleaner
             if (frame == null) continue;
             MethodBase? insertAfter = null;
             MethodBase? info = frame.GetMethod();
+            if (info == null) continue;
             Type? declType = info.DeclaringType;
         redo:
             // having issues with this line while in mono when not using 'is'.
