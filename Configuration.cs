@@ -20,6 +20,7 @@ public class StackCleanerConfiguration : ICloneable
     private IFormatProvider _locale = CultureInfo.InvariantCulture;
     private ColorConfig _colors = Color4Config.Default;
     private bool _includeSourceData = true;
+    private bool _includeAssemblyData;
     private bool _putSourceDataOnNewLine = true;
     private bool _includeNamespaces = true;
     private bool _includeLineData = true;
@@ -177,6 +178,21 @@ public class StackCleanerConfiguration : ICloneable
     }
 
     /// <summary>
+    /// Assembly-qualified name (and path if <see cref="IncludeFileData"/> is <see langword="true"/>) will be included in the source data.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public bool IncludeAssemblyData
+    {
+        get => _includeAssemblyData;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _includeAssemblyData = value;
+        }
+    }
+
+    /// <summary>
     /// Primitive types will use their aliases.
     /// </summary>
     /// <remarks>ex. <see cref="int"/> instead of <see cref="Int32">Int32</see>.</remarks>
@@ -295,7 +311,8 @@ public class StackCleanerConfiguration : ICloneable
         _includeSourceData = _includeSourceData,
         _putSourceDataOnNewLine = _putSourceDataOnNewLine,
         _useTypeAliases = _useTypeAliases,
-        _includeNamespaces = _includeNamespaces
+        _includeNamespaces = _includeNamespaces,
+        _includeAssemblyData = _includeAssemblyData
     };
 
     /// <returns>A readonly array representing the current hidden types. May equal <see cref="StackTraceCleaner.DefaultHiddenTypes"/> </returns>
@@ -919,7 +936,7 @@ public sealed class Color4Config : ColorConfig
             bits |= 2;
         if ((argb & byte.MaxValue) > 180)
             bits |= 1;
-        return (ConsoleColor)bits;
+        return bits == (int)ConsoleColor.Black ? ConsoleColor.DarkGray : (ConsoleColor)bits;
     }
 }
 

@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Security;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,8 +17,8 @@ namespace StackCleaner;
 /// Tool that clears up stack traces to make them much more readable during debugging.<br/>
 /// Supports highly customizable color formatting in the following formats:<br/>
 /// <br/>
-/// • <see cref="ConsoleColor"/><br/>
-/// • ANSI color codes (4-bit)<br/>
+/// • <see cref="ConsoleColor"/> (Only compatible with <see cref="WriteToConsole(StackTrace,bool)"/>)<br/>
+/// • ANSI color codes (3-bit and 4-bit)<br/>
 /// • Extended ANSI color codes (32-bit where supported)<br/>
 /// • Unity Rich Text<br/>
 /// • Unity TextMeshPro Rich Text<br/>
@@ -115,6 +116,8 @@ public class StackTraceCleaner
     private const string ColumnNumberPrefixSymbol = "COL #";
     private const string ILOffsetPrefixSymbol = "IL";
     private const string FilePrefixSymbol = "FILE: ";
+    private const string AssemblyPrefixSymbol = "ASSEMBLY: \"";
+    private const string AssemblyPathPrefixSymbol = "LOCATION: \"";
     private const string HiddenLineWarning = "Some lines hidden for readability.";
     /// <summary>Html class for the background div.</summary>
     public const string BackgroundClassName = "st_bkgr";
@@ -634,8 +637,8 @@ public class StackTraceCleaner
                 if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
                     writer.Write(GetEndTag());
 
-                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored
+                if (_appendColor && span.Color is not TokenType.Space && currentColor != span.Color)
                 {
                     writer.Write(GetColorString(span.Color));
                     currentColor = span.Color;
@@ -692,8 +695,8 @@ public class StackTraceCleaner
                     token.ThrowIfCancellationRequested();
                 }
 
-                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored
+                if (_appendColor && span.Color is not TokenType.Space && currentColor != span.Color)
                 {
                     await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
@@ -907,8 +910,8 @@ public class StackTraceCleaner
                 if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
                     writer.Write(GetEndTag());
 
-                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored
+                if (_appendColor && span.Color is not TokenType.Space && currentColor != span.Color)
                 {
                     writer.Write(GetColorString(span.Color));
                     currentColor = span.Color;
@@ -961,8 +964,8 @@ public class StackTraceCleaner
                     token.ThrowIfCancellationRequested();
                 }
 
-                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored
+                if (_appendColor && span.Color is not TokenType.Space && currentColor != span.Color)
                 {
                     await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
@@ -1171,8 +1174,8 @@ public class StackTraceCleaner
                 if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
                     writer.Write(GetEndTag());
 
-                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored
+                if (_appendColor && span.Color is not TokenType.Space && currentColor != span.Color)
                 {
                     writer.Write(GetColorString(span.Color));
                     currentColor = span.Color;
@@ -1225,8 +1228,8 @@ public class StackTraceCleaner
                     token.ThrowIfCancellationRequested();
                 }
 
-                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored
+                if (_appendColor && span.Color is not TokenType.Space && currentColor != span.Color)
                 {
                     await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
@@ -1657,6 +1660,7 @@ public class StackTraceCleaner
             MethodBase? info = frame.GetMethod();
             if (info == null) continue;
             Type? declType = info.DeclaringType;
+            Assembly? assembly = declType?.Assembly;
         redo:
             // having issues with this line while in mono when not using 'is'.
             if (info is null || info == null)
@@ -1752,6 +1756,13 @@ public class StackTraceCleaner
                         yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
                     }
                     yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.ExtraData);
+                    if (assembly != null && _config.IncludeAssemblyData)
+                    {
+                        foreach (SpanData span in EnumerateAssembly(assembly, _config.PutSourceDataOnNewLine))
+                        {
+                            yield return span;
+                        }
+                    }
                 }
             }
             if (_writeParaTags)
@@ -1760,6 +1771,7 @@ public class StackTraceCleaner
             if (frame != null && insertAfter is not null && insertAfter != null)
             {
                 info = insertAfter;
+                assembly = insertAfter.DeclaringType?.Assembly;
                 insertAfter = null;
                 frame = null;
                 goto redo;
@@ -2272,6 +2284,47 @@ public class StackTraceCleaner
                 info = containerMethod;
                 goto redo;
             }
+        }
+    }
+    private IEnumerable<SpanData> EnumerateAssembly(Assembly assembly, bool newLine)
+    {
+        string? assemblyQualifiedName = assembly.FullName;
+        if (assemblyQualifiedName != null)
+        {
+            if (_writeParaTags && _config.PutSourceDataOnNewLine)
+            {
+                yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
+                yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
+            }
+            yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? SpaceSymbolStr : (Environment.NewLine + SpaceSymbolStr)) 
+                                      + AssemblyPrefixSymbol + assemblyQualifiedName + DoubleQuotationMarkSymbol, TokenType.ExtraData);
+        }
+
+        if (!_config.IncludeFileData)
+            yield break;
+
+        string? pos = null;
+
+        try
+        {
+            pos = assembly.Location;
+
+            // shorten the path if it's a subfolder of the current working directory
+            if (pos != null)
+                pos = StackCleanerUtilities.GetRelativePath(Environment.CurrentDirectory, pos);
+        }
+        catch (SecurityException) { }
+        catch (NotSupportedException) { }
+        
+        if (pos != null)
+        {
+            if (_writeParaTags && _config.PutSourceDataOnNewLine)
+            {
+                yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
+                yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
+            }
+            yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? SpaceSymbolStr : (Environment.NewLine + SpaceSymbolStr))
+                                      + AssemblyPathPrefixSymbol + pos + DoubleQuotationMarkSymbol, TokenType.ExtraData);
         }
     }
     private readonly struct SpanData

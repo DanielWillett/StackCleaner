@@ -6,12 +6,13 @@ https://www.nuget.org/packages/DanielWillett.StackCleaner
 Clears up stack traces to make them much more readable during debugging.
 
 **Supports highly customizable color formatting in the following formats:**
-* ConsoleColor,
-* ANSI color codes (3-bit or 4-bit),
-* Extended ANSI color codes (32-bit where supported),
-* Unity Rich Text,
-* Unity TextMeshPro Rich Text,
-* Html (with <span> tags).
+* ConsoleColor
+    - Only supported with the `WriteToConsole` method as it directly sets `Console.ForegroundColor`.
+* ANSI color codes (3-bit or 4-bit)
+* Extended ANSI color codes (32-bit where supported)
+* Unity Rich Text
+* Unity TextMeshPro Rich Text
+* Html (with <span> tags)
 
 ### Example (Extended ANSI)
 ![stack cleaner comparison](https://github.com/DanielWillett/StackCleaner/assets/12886600/57aaa567-db7c-4c9d-a32a-ca355d10c5f6)
@@ -46,8 +47,7 @@ StackTraceCleaner cleaner = new StackTraceCleaner(new StackCleanerConfiguration
 Console.ForegroundColor = ConsoleColor.Red;
 Console.WriteLine(ex.GetType().Name + " - " + ex.Message);
 
-if (StackTraceCleaner.GetStackTrace(ex) is { } stackTrace)
-  cleaner.WriteToConsole(stackTrace);
+cleaner.WriteToConsole(ex);
 ```
 
 ### Write To String
@@ -163,6 +163,9 @@ public static readonly StackTraceCleaner StackTraceCleaner = new StackTraceClean
 
   // Relative source file path will be included in the source data.
     IncludeFileData = false,
+
+  // Assembly-qualified name (and path if IncludeFileData is true) will be included in the source data.
+    IncludeAssemblyData = false,
 
   // 'Primitive' types will use their aliases. For example, 'int' instead of 'Int32'.
     UseTypeAliases = false,
