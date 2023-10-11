@@ -164,7 +164,7 @@ public class StackTraceCleaner
     private static readonly Type TypeVoid = typeof(void);
     private static readonly Type TypeNullableValueType = typeof(Nullable<>);
     private static readonly Type TypeCompilerGenerated = typeof(CompilerGeneratedAttribute);
-    private static readonly Type TypeStateMachineBase = typeof(StateMachineAttribute);
+    // private static readonly Type TypeStateMachineBase = typeof(StateMachineAttribute);
     private static readonly Dictionary<Type, MethodInfo?> CompilerGeneratedStateMachineSourceCache = new Dictionary<Type, MethodInfo?>(64);
 
     // types that are hidden by default. These are all the types used by the Task internal.
@@ -222,6 +222,7 @@ public class StackTraceCleaner
             is StackColorFormatType.UnityRichText
             or StackColorFormatType.TextMeshProRichText
             or StackColorFormatType.ANSIColor
+            or StackColorFormatType.ANSIColorNoBright
             or StackColorFormatType.ExtendedANSIColor
             or StackColorFormatType.Html;
 
@@ -239,7 +240,7 @@ public class StackTraceCleaner
         _defBufferSizeMult = _config.ColorFormatting is StackColorFormatType.None
             or StackColorFormatType.ConsoleColor
             ? 192
-            : _config.ColorFormatting == StackColorFormatType.ANSIColor ? 384 : 768;
+            : _config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ANSIColorNoBright ? 384 : 768;
     }
 
     /// <summary>
@@ -464,7 +465,7 @@ public class StackTraceCleaner
                 if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
                     ConsoleColor old2 = currentColor;
-                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color), _config.ColorFormatting != StackColorFormatType.ANSIColorNoBright) : (ConsoleColor)(GetColor(span.Color) - 1);
                     if (old2 != currentColor)
                         Console.ForegroundColor = currentColor;
                 }
@@ -512,7 +513,7 @@ public class StackTraceCleaner
                     if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                     {
                         ConsoleColor old2 = currentColor;
-                        currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                        currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color), _config.ColorFormatting != StackColorFormatType.ANSIColorNoBright) : (ConsoleColor)(GetColor(span.Color) - 1);
                         if (old2 != currentColor)
                             Console.ForegroundColor = currentColor;
                     }
@@ -633,8 +634,8 @@ public class StackTraceCleaner
                 if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
                     writer.Write(GetEndTag());
 
-                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
                 {
                     writer.Write(GetColorString(span.Color));
                     currentColor = span.Color;
@@ -657,7 +658,7 @@ public class StackTraceCleaner
             writer.Write(OuterEndHtmlTagSymbol);
 
         // reset console color
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ANSIColorNoBright)
             writer.Write(GetANSIResetString());
 
         // end line
@@ -691,8 +692,8 @@ public class StackTraceCleaner
                     token.ThrowIfCancellationRequested();
                 }
 
-                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
                 {
                     await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
@@ -718,7 +719,7 @@ public class StackTraceCleaner
             writer.Write(OuterEndHtmlTagSymbol);
 
         // reset console color
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ANSIColorNoBright)
             await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
 
@@ -831,7 +832,8 @@ public class StackTraceCleaner
                 if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
                     ConsoleColor old2 = currentColor;
-                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color), _config.ColorFormatting != StackColorFormatType.ANSIColorNoBright)
+                        : (ConsoleColor)(GetColor(span.Color) - 1);
                     if (old2 != currentColor)
                         Console.ForegroundColor = currentColor;
                 }
@@ -905,8 +907,8 @@ public class StackTraceCleaner
                 if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
                     writer.Write(GetEndTag());
 
-                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
                 {
                     writer.Write(GetColorString(span.Color));
                     currentColor = span.Color;
@@ -929,7 +931,7 @@ public class StackTraceCleaner
             writer.Write(OuterEndHtmlTagSymbol);
 
         // reset console color
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ANSIColorNoBright)
             writer.Write(GetANSIResetString());
     }
 
@@ -960,7 +962,7 @@ public class StackTraceCleaner
                 }
 
                 // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
                 {
                     await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
@@ -986,7 +988,7 @@ public class StackTraceCleaner
             writer.Write(OuterEndHtmlTagSymbol);
 
         // reset console color
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ANSIColorNoBright)
             await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
     }
@@ -1071,7 +1073,7 @@ public class StackTraceCleaner
 
         encoding ??= Encoding.UTF8;
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
-        await WriteToTextWriterIntlAsync(method, writer, true, token).ConfigureAwait(false);
+        await WriteToTextWriterIntlAsync(method, writer, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
 
@@ -1095,7 +1097,7 @@ public class StackTraceCleaner
                 if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
                     ConsoleColor old2 = currentColor;
-                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color)) : (ConsoleColor)(GetColor(span.Color) - 1);
+                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color), _config.ColorFormatting != StackColorFormatType.ANSIColorNoBright) : (ConsoleColor)(GetColor(span.Color) - 1);
                     if (old2 != currentColor)
                         Console.ForegroundColor = currentColor;
                 }
@@ -1144,14 +1146,14 @@ public class StackTraceCleaner
         if (method == null)
             throw new ArgumentNullException(nameof(method));
 
-        await WriteToTextWriterIntlAsync(method, writer, true, token).ConfigureAwait(false);
+        await WriteToTextWriterIntlAsync(method, writer, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
 
     /// <summary>
     /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/>.
     /// </summary>
-    private void WriteToTextWriterIntl(MethodBase method, TextWriter writer, bool warnIfApplicable = true)
+    private void WriteToTextWriterIntl(MethodBase method, TextWriter writer)
     {
         TokenType currentColor = (TokenType)255;
         bool div = false;
@@ -1169,8 +1171,8 @@ public class StackTraceCleaner
                 if (currentColor != span.Color && (int)currentColor != 255 && ShouldWriteEnd(span.Color))
                     writer.Write(GetEndTag());
 
-                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
                 {
                     writer.Write(GetColorString(span.Color));
                     currentColor = span.Color;
@@ -1193,14 +1195,14 @@ public class StackTraceCleaner
             writer.Write(OuterEndHtmlTagSymbol);
 
         // reset console color
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ANSIColorNoBright)
             writer.Write(GetANSIResetString());
     }
 
     /// <summary>
     /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
-    private async Task WriteToTextWriterIntlAsync(MethodBase method, TextWriter writer, bool warnIfApplicable = true, CancellationToken token = default)
+    private async Task WriteToTextWriterIntlAsync(MethodBase method, TextWriter writer, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         TokenType currentColor = (TokenType)255;
@@ -1223,8 +1225,8 @@ public class StackTraceCleaner
                     token.ThrowIfCancellationRequested();
                 }
 
-                // start current color                space is ignored   end tag is ignored but still ends as to not overlap html tags
-                if (_appendColor && span.Color is not TokenType.Space or TokenType.EndTag && currentColor != span.Color)
+                // start current color                space is ignored        end tag is ignored but still ends as to not overlap html tags
+                if (_appendColor && span.Color is not TokenType.Space and not TokenType.EndTag && currentColor != span.Color)
                 {
                     await writer.WriteAsync(GetColorString(span.Color)).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
@@ -1250,7 +1252,7 @@ public class StackTraceCleaner
             writer.Write(OuterEndHtmlTagSymbol);
 
         // reset console color
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor)
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ExtendedANSIColor)
             await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
     }
@@ -1528,24 +1530,32 @@ public class StackTraceCleaner
     /// <summary>
     /// Helper function to return the corresponding color of the token from config.
     /// </summary>
-    private int GetColor(TokenType type) => type switch
+    private int GetColor(TokenType type)
     {
-        TokenType.Keyword => _config.Colors!.KeywordColor,
-        TokenType.Method => _config.Colors!.MethodColor,
-        TokenType.Property => _config.Colors!.PropertyColor,
-        TokenType.Parameter => _config.Colors!.ParameterColor,
-        TokenType.Class => _config.Colors!.ClassColor,
-        TokenType.Struct => _config.Colors!.StructColor,
-        TokenType.FlowKeyword => _config.Colors!.FlowKeywordColor,
-        TokenType.Interface => _config.Colors!.InterfaceColor,
-        TokenType.GenericParameter => _config.Colors!.GenericParameterColor,
-        TokenType.Enum => _config.Colors!.EnumColor,
-        TokenType.Namespace => _config.Colors!.NamespaceColor,
-        TokenType.Punctuation => _config.Colors!.PunctuationColor,
-        TokenType.ExtraData => _config.Colors!.ExtraDataColor,
-        TokenType.LinesHiddenWarning => _config.Colors!.LinesHiddenWarningColor,
-        _ => _isArgbColor ? unchecked((int)uint.MaxValue) : (int)ConsoleColor.Gray + 1
-    };
+        int argb = type switch
+        {
+            TokenType.Keyword => _config.Colors!.KeywordColor,
+            TokenType.Method => _config.Colors!.MethodColor,
+            TokenType.Property => _config.Colors!.PropertyColor,
+            TokenType.Parameter => _config.Colors!.ParameterColor,
+            TokenType.Class => _config.Colors!.ClassColor,
+            TokenType.Struct => _config.Colors!.StructColor,
+            TokenType.FlowKeyword => _config.Colors!.FlowKeywordColor,
+            TokenType.Interface => _config.Colors!.InterfaceColor,
+            TokenType.GenericParameter => _config.Colors!.GenericParameterColor,
+            TokenType.Enum => _config.Colors!.EnumColor,
+            TokenType.Namespace => _config.Colors!.NamespaceColor,
+            TokenType.Punctuation => _config.Colors!.PunctuationColor,
+            TokenType.ExtraData => _config.Colors!.ExtraDataColor,
+            TokenType.LinesHiddenWarning => _config.Colors!.LinesHiddenWarningColor,
+            _ => _isArgbColor ? unchecked((int)uint.MaxValue) : (int)ConsoleColor.Gray + 1
+        };
+
+        if (!_isArgbColor && _config.ColorFormatting == StackColorFormatType.ANSIColorNoBright)
+            argb = ((argb - 1) & ~8) + 1;
+
+        return argb;
+    }
 
     /// <summary>
     /// Returns the correct start tag based on <paramref name="token"/> and the current configuration.
@@ -1559,7 +1569,8 @@ public class StackTraceCleaner
             {
                 StackColorFormatType.UnityRichText => GetUnityString(GetColor(token)),
                 StackColorFormatType.TextMeshProRichText => GetTMProString(GetColor(token)),
-                StackColorFormatType.ANSIColor => GetANSIForegroundString(Color4Config.ToConsoleColor(GetColor(token))),
+                StackColorFormatType.ANSIColor => GetANSIForegroundString(Color4Config.ToConsoleColor(GetColor(token), true)),
+                StackColorFormatType.ANSIColorNoBright => GetANSIForegroundString(Color4Config.ToConsoleColor(GetColor(token), false)),
                 StackColorFormatType.ExtendedANSIColor => GetExtANSIForegroundString(GetColor(token)),
                 StackColorFormatType.Html => GetHtmlStartTag(token)
             };
@@ -1570,6 +1581,7 @@ public class StackTraceCleaner
             StackColorFormatType.UnityRichText => GetUnityString(ColorConfig.ToArgb((ConsoleColor)(GetColor(token) - 1))),
             StackColorFormatType.TextMeshProRichText => GetTMProString(ColorConfig.ToArgb((ConsoleColor)(GetColor(token) - 1))),
             StackColorFormatType.ANSIColor => GetANSIForegroundString((ConsoleColor)(GetColor(token) - 1)),
+            StackColorFormatType.ANSIColorNoBright => GetANSIForegroundString((ConsoleColor)(GetColor(token) - 1)),
             StackColorFormatType.ExtendedANSIColor => GetExtANSIForegroundString(ColorConfig.ToArgb((ConsoleColor)(GetColor(token) - 1))),
             StackColorFormatType.Html => GetHtmlStartTag(token)
         };
@@ -1965,7 +1977,7 @@ public class StackTraceCleaner
                                     // any fields not starting in (regex) '\<.*\>' must be parameters.
                                     for (int i = 0; i < fields.Length; ++i)
                                     {
-                                        string? name = fields[i].Name;
+                                        string name = fields[i].Name;
                                         if (name is { Length: > 0 } && name[0] != '<')
                                             ++paramCt;
                                         // if theres a (regex) '\<\>\d+__this' parameter exclude static methods
@@ -2096,7 +2108,7 @@ public class StackTraceCleaner
                         int lastIndex = -1;
                         while (true)
                         {
-                            index = ns!.IndexOf(MemberSeparatorSymbol, index + 1);
+                            index = ns.IndexOf(MemberSeparatorSymbol, index + 1);
                             if (index == -1) break;
                             if (lastIndex > 0)
                             {
@@ -2115,7 +2127,7 @@ public class StackTraceCleaner
                         }
                     }
                     // send whole namespace at once since splitting isn't needed
-                    else yield return new SpanData(ns!, TokenType.Space);
+                    else yield return new SpanData(ns, TokenType.Space);
                 }
             }
             if (declType != null)

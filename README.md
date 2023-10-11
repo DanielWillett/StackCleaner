@@ -4,6 +4,7 @@
 #### Supports highly customizable color formatting in the following formats:
 * ConsoleColor,
 * ANSI color codes (4-bit),
+* ANSI color codes (3-bit),
 * Extended ANSI color codes (32-bit where supported),
 * Unity Rich Text,
 * Unity TextMeshPro Rich Text,
@@ -201,6 +202,7 @@ public static readonly StackTraceCleaner StackTraceCleaner = new StackTraceClean
 * `ANSIColor` => ANSI Terminal text formatting codes. See more: [Microsft: Virtual Terminal Text Formatting](https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences?redirectedfrom=MSDN#text-formatting).
 * `ExtendedANSIColor` => ANSI Terminal text formatting codes. See more: [Microsft: Virtual Terminal Extended Color Formatting](https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences?redirectedfrom=MSDN#extended-colors).
 * `Html` => Text is colored with &lt;span&gt; tags. Use classes instead of constant CSS styles by setting HtmlUseClassNames to true. The classes are public constants in StackTraceCleaner.
+* `ANSIColorNoBright` => ANSI Terminal text formatting codes without the bright bit. Discord can display this in an `ansi` code block.
   
 ### Custom Color Provider
 ```cs

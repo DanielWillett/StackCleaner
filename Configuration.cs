@@ -237,7 +237,7 @@ public class StackCleanerConfiguration : ICloneable
         {
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
-            if (value is < 0 or > StackColorFormatType.Html)
+            if (value is < 0 or > StackColorFormatType.ANSIColorNoBright)
                 throw new ArgumentOutOfRangeException(nameof(value));
             _colorFormatting = value;
         }
@@ -339,7 +339,12 @@ public enum StackColorFormatType
     /// Text is colored with &lt;span&gt; tags.
     /// </summary>
     /// <remarks>Use classes instead of constant CSS styles by setting <see cref="StackCleanerConfiguration.HtmlUseClassNames"/> to <see langword="true"/>.</remarks>
-    Html
+    Html,
+    /// <summary>
+    /// ANSI Text formatting codes without bright colors (3-bit).<br/>
+    /// <seealso href="https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences?redirectedfrom=MSDN#text-formatting"/>
+    /// </summary>
+    ANSIColorNoBright
 }
 
 
@@ -904,9 +909,10 @@ public sealed class Color4Config : ColorConfig
     /// <summary>
     /// Convert ARGB data to <see cref="ConsoleColor"/> (picks the closest).
     /// </summary>
-    internal static ConsoleColor ToConsoleColor(int argb)
+    internal static ConsoleColor ToConsoleColor(int argb, bool allowBright)
     {
-        int bits = ((argb >> 16) & byte.MaxValue) > 128 || ((argb >> 8) & byte.MaxValue) > 128 || (argb & byte.MaxValue) > 128 ? 8 : 0;
+        int bits = allowBright && (((argb >> 16) & byte.MaxValue) > 128 || ((argb >> 8) & byte.MaxValue) > 128 || (argb & byte.MaxValue) > 128) ? 8 : 0;
+
         if (((argb >> 16) & byte.MaxValue) > 180)
             bits |= 4;
         if (((argb >> 8) & byte.MaxValue) > 180)
@@ -1191,5 +1197,10 @@ public sealed class Color32Config : ColorConfig
     /// <summary>
     /// Convert ARGB data to <see cref="Color"/>.
     /// </summary>
-    public static ConsoleColor ToConsoleColor(Color color) => Color4Config.ToConsoleColor(color.ToArgb());
+    public static ConsoleColor ToConsoleColor(Color color) => Color4Config.ToConsoleColor(color.ToArgb(), true);
+
+    /// <summary>
+    /// Convert ARGB data to <see cref="Color"/>.
+    /// </summary>
+    public static ConsoleColor ToConsoleColor(Color color, bool allowBright) => Color4Config.ToConsoleColor(color.ToArgb(), allowBright);
 }
