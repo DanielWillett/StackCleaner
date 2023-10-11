@@ -3,6 +3,8 @@
 Download the latest version on NuGet (Releases will no longer be kept up to date) 
 https://www.nuget.org/packages/DanielWillett.StackCleaner
 
+![stack cleaner comparison](https://github.com/DanielWillett/StackCleaner/assets/12886600/3f8738f6-5673-4cad-b67d-4c7e0169e97a)
+
 #### Clears up stack traces to make them much more readable during debugging.
 #### Supports highly customizable color formatting in the following formats:
 * ConsoleColor,
