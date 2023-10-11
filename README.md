@@ -1,6 +1,6 @@
 # StackCleaner
 
-Download the latest version on NuGet
+Download the latest version on NuGet (Releases will no longer be kept up to date) 
 https://www.nuget.org/packages/DanielWillett.StackCleaner
 
 #### Clears up stack traces to make them much more readable during debugging.
@@ -163,11 +163,11 @@ public static readonly StackTraceCleaner StackTraceCleaner = new StackTraceClean
 
   // 'Primitive' types will use their aliases. For example, 'int' instead of 'Int32'.
     UseTypeAliases = false,
-
-  // Relative source file path will be included in the source data.
+    
+  // If ColorFormatting is set to 'Html', use css class names (defined as public constants in the StackTraceCleaner class) instead of style tags.
     HtmlUseClassNames = false,
 
-  // Relative source file path will be included in the source data.
+  // If ColorFormatting is set to 'Html', write an outer <div> with a background color around the output HTML.
     HtmlWriteOuterDiv = false,
 
   // Types who's methods will be skipped in stack traces.
@@ -192,6 +192,13 @@ public static readonly StackTraceCleaner StackTraceCleaner = new StackTraceClean
     Colors = new Color32Config
     {                            // alpha channel is ignored
       KeywordColor = Color.FromArgb(255, 230, 255, 153)
+    },
+
+  // Color settings with 32 bit colors when using UnityEngine (because System.Drawing is not available).
+  // This is only available in the .NET Framework 4.6.1 or 4.8.1 and .NET Standard 2.1 builds.
+    Colors = new UnityColor32Config
+    {                                            // alpha channel is ignored
+      KeywordColor = new Color(0.34f, 0.61f, 0.84f, 1f)
     }
 });
 ```
@@ -208,6 +215,19 @@ public static readonly StackTraceCleaner StackTraceCleaner = new StackTraceClean
 * `ANSIColorNoBright` => ANSI Terminal text formatting codes without the bright bit. Discord can display this in an `ansi` code block.
   
 ### Custom Color Provider
+
+A `UnityColor32Config` is already included, but this shows one way you could create a custom color provider. The base properties are stored in Int32 values formatted in ARGB32 converted like shown below:
+```cs
+unchecked
+{
+    int argb = color.a << 24 | color.r << 16 | color.g << 8 | color.b;
+
+    byte a = (byte)(argb >> 24), r = (byte)(argb >> 16), g = (byte)(argb >> 8), b = (byte)argb;
+}
+```
+Please note that you can use StackCleaner without referencing `UnityEngine.dll` as long as you don't access the `UnityColor32Config` class.
+
+UnityEngine.Color Custom Converter:
 ```cs
 using StackCleaner;
 using UnityEngine;
