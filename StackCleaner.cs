@@ -1748,20 +1748,18 @@ public class StackTraceCleaner
                               DoubleQuotationMarkSymbol;
                     }
                 }
-                if (ed.Length > 0)
+                if (ed.Length > 0 && _writeParaTags && _config.PutSourceDataOnNewLine)
                 {
-                    if (_writeParaTags && _config.PutSourceDataOnNewLine)
-                    {
-                        yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
-                        yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
-                    }
+                    yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
+                    yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
                     yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.ExtraData);
-                    if (assembly != null && _config.IncludeAssemblyData)
+                }
+
+                if (assembly != null && _config.IncludeAssemblyData)
+                {
+                    foreach (SpanData span in EnumerateAssembly(assembly, _config.PutSourceDataOnNewLine))
                     {
-                        foreach (SpanData span in EnumerateAssembly(assembly, _config.PutSourceDataOnNewLine))
-                        {
-                            yield return span;
-                        }
+                        yield return span;
                     }
                 }
             }
@@ -2291,12 +2289,12 @@ public class StackTraceCleaner
         string? assemblyQualifiedName = assembly.FullName;
         if (assemblyQualifiedName != null)
         {
-            if (_writeParaTags && _config.PutSourceDataOnNewLine)
+            if (_writeParaTags && newLine)
             {
                 yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
                 yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
             }
-            yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? SpaceSymbolStr : (Environment.NewLine + SpaceSymbolStr)) 
+            yield return new SpanData((!newLine || _writeParaTags || !_writeNewline ? SpaceSymbolStr : (Environment.NewLine + SpaceSymbolStr)) 
                                       + AssemblyPrefixSymbol + assemblyQualifiedName + DoubleQuotationMarkSymbol, TokenType.ExtraData);
         }
 
@@ -2318,12 +2316,12 @@ public class StackTraceCleaner
         
         if (pos != null)
         {
-            if (_writeParaTags && _config.PutSourceDataOnNewLine)
+            if (_writeParaTags && newLine)
             {
                 yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
                 yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
             }
-            yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? SpaceSymbolStr : (Environment.NewLine + SpaceSymbolStr))
+            yield return new SpanData((!newLine || _writeParaTags || !_writeNewline ? SpaceSymbolStr : (Environment.NewLine + SpaceSymbolStr))
                                       + AssemblyPathPrefixSymbol + pos + DoubleQuotationMarkSymbol, TokenType.ExtraData);
         }
     }

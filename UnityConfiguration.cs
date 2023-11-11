@@ -1,4 +1,4 @@
-﻿#if NETFRAMEWORK || NETSTANDARD
+﻿#if NETFRAMEWORK || NETSTANDARD2_1
 using System;
 using UnityEngine;
 namespace StackCleaner;
