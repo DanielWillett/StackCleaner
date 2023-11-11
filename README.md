@@ -15,7 +15,7 @@ Clears up stack traces to make them much more readable during debugging.
 * Html (with <span> tags)
 
 ### Example (Extended ANSI)
-![stack cleaner comparison](https://github.com/DanielWillett/StackCleaner/assets/12886600/57aaa567-db7c-4c9d-a32a-ca355d10c5f6)
+![stack cleaner comparison](https://i.imgur.com/JAlgrcL.png)
 
 # Usage
 
