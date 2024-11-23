@@ -1,9 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <TargetFrameworks>net481;net7.0;net6.0;net461;netstandard2.1;netstandard2.0;net5.0</TargetFrameworks>
+    <TargetFrameworks>net461;netstandard2.1;netstandard2.0;net5.0</TargetFrameworks>
     <AssemblyTitle>StackCleaner</AssemblyTitle>
     <Product>StackCleaner</Product>
-    <Copyright>Copyright ©  2023</Copyright>
     <OutputPath>bin\$(Configuration)\</OutputPath>
     <Nullable>enable</Nullable>
     <LangVersion>preview</LangVersion>
@@ -11,7 +11,7 @@
     <GenerateDocumentationFile>True</GenerateDocumentationFile>
     <IncludeSymbols>True</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>1.4.2</Version>
+    <Version>1.4.3</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
@@ -20,32 +20,38 @@
     <Company>Daniel Willett</Company>
     <Authors>Daniel Willett</Authors>
     <Description>Stack trace formatter for dotnet written and formatted in C#.</Description>
-    <PackageProjectUrl></PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/DanielWillett/StackCleaner</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <RepositoryUrl>https://github.com/DanielWillett/StackCleaner</RepositoryUrl>
+    <RepositoryUrl>https://github.com/DanielWillett/StackCleaner.git</RepositoryUrl>
     <PackageTags>stack trace;debugging;error;logging;logger</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <DebugType>portable</DebugType>
   </PropertyGroup>
+
   <PropertyGroup Condition="exists('C:\Users\danny\OneDrive\Documents\Strong Name Keys\DanielWillett.StackCleaner\DanielWillett.StackCleaner.snk')">
     <SignAssembly>True</SignAssembly>
     <AssemblyOriginatorKeyFile>C:\Users\danny\OneDrive\Documents\Strong Name Keys\DanielWillett.StackCleaner\DanielWillett.StackCleaner.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DebugType>portable</DebugType>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>portable</DebugType>
-  </PropertyGroup>
-  <ItemGroup Condition="'$(TargetFramework)'=='net461' Or '$(TargetFramework)'=='net481' Or '$(TargetFramework)'=='netstandard2.1'">
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>C:\SteamCMD\steamapps\common\U3DS\Unturned_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+
+  <ItemGroup>
+    <Reference Include="UnityEngine">
+      <HintPath>$(SolutionDir)Libraries/UnityEngine.dll</HintPath>
     </Reference>
   </ItemGroup>
+
   <ItemGroup Condition="'$(TargetFramework)'=='netstandard2.0'">
-    <PackageReference Include="System.Reflection.Emit" Version="4.3.0"/>
-    <PackageReference Include="System.Reflection.Emit.Lightweight" Version="4.3.0"/>
+    <PackageReference Include="System.Reflection.Emit" Version="4.3.0" />
+    <PackageReference Include="System.Reflection.Emit.Lightweight" Version="4.3.0" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="StackCleaner.Tests\**" />
+    <EmbeddedResource Remove="StackCleaner.Tests\**" />
+    <None Remove="StackCleaner.Tests\**" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
+
 </Project>

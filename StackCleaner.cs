@@ -5,7 +5,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text;
@@ -13,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace StackCleaner;
+
 /// <summary>
 /// Tool that clears up stack traces to make them much more readable during debugging.<br/>
 /// Supports highly customizable color formatting in the following formats:<br/>
@@ -26,47 +26,6 @@ namespace StackCleaner;
 /// </summary>
 public class StackTraceCleaner
 {
-    private static bool IsMono { get; } = Type.GetType("Mono.Runtime") != null;
-
-    // mono uses a different method to store remote stack traces than dotnet,
-    // which don't get displayed on the stack trace.
-    // this means any asnyc stack traces would not show any before the last context change
-    // (this fixes that)
-    private static Func<Exception, StackTrace[]>? MonoCapturedTracesAccessor
-    {
-        get
-        {
-            if (!hasCheckedRemoteAccessor)
-            {
-                hasCheckedRemoteAccessor = true;
-                try
-                {
-                    // generate a getter function for the mono field Exception.captured_traces.
-                    FieldInfo? field = typeof(Exception).GetField("captured_traces", BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (field != null)
-                    {
-                        DynamicMethod method = new DynamicMethod("get_captured_traces",
-                            MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
-                            CallingConventions.HasThis,
-                            typeof(StackTrace[]), new Type[] { typeof(Exception) },
-                            typeof(StackTraceCleaner), true);
-                        ILGenerator il = method.GetILGenerator();
-                        il.Emit(OpCodes.Ldarg_0);
-                        il.Emit(OpCodes.Ldfld, field);
-                        il.Emit(OpCodes.Ret);
-                        _getMonoRemoteAccessor = (Func<Exception, StackTrace[]>)method.CreateDelegate(typeof(Func<Exception, StackTrace[]>));
-                    }
-                }
-                catch
-                {
-                    // ignored
-                }
-            }
-            return _getMonoRemoteAccessor;
-        }
-    }
-    private static bool hasCheckedRemoteAccessor;
-    private static Func<Exception, StackTrace[]>? _getMonoRemoteAccessor;
     private const char ConsoleEscapeCharacter = '\u001b';
     private const char PointerSymbol = '*';
     private const char MemberSeparatorSymbol = '.';
@@ -269,14 +228,6 @@ public class StackTraceCleaner
         using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult * stackTrace.FrameCount));
         //stream.Position = 0;
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
-        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
-        if (remoteTraces is { Length: > 0 })
-        {
-            for (int i = 0; i < remoteTraces.Length; ++i)
-            {
-                WriteToTextWriterIntl(remoteTraces[i], writer, false);
-            }
-        }
         WriteToTextWriterIntl(stackTrace, writer, true);
         writer.Flush();
         byte[] bytes = stream.GetBuffer();
@@ -338,14 +289,6 @@ public class StackTraceCleaner
         encoding ??= Encoding.Default;
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
-        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
-        if (remoteTraces is { Length: > 0 })
-        {
-            for (int i = 0; i < remoteTraces.Length; ++i)
-            {
-                WriteToTextWriterIntl(remoteTraces[i], writer, false);
-            }
-        }
         WriteToTextWriterIntl(stackTrace, writer, true);
         writer.Flush();
     }
@@ -436,14 +379,6 @@ public class StackTraceCleaner
         encoding ??= Encoding.UTF8;
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
-        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
-        if (remoteTraces is { Length: > 0 })
-        {
-            for (int i = 0; i < remoteTraces.Length; ++i)
-            {
-                await WriteToTextWriterIntlAsync(remoteTraces[i], writer, false, token).ConfigureAwait(false);
-            }
-        }
         await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
@@ -504,32 +439,27 @@ public class StackTraceCleaner
 
         if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
         {
-            StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
-            int c = remoteTraces == null ? 0 : remoteTraces.Length;
-            for (int i = 0; i <= c; ++i)
+            StackTrace trace = new StackTrace(exception, _config.IncludeSourceData);
+            ConsoleColor currentColor = (ConsoleColor)255;
+            ConsoleColor old = Console.ForegroundColor;
+            foreach (SpanData span in EnumerateSpans(trace, true))
             {
-                StackTrace trace = i == c ? new StackTrace(exception, _config.IncludeSourceData) : remoteTraces![i];
-                ConsoleColor currentColor = (ConsoleColor)255;
-                ConsoleColor old = Console.ForegroundColor;
-                foreach (SpanData span in EnumerateSpans(trace, true))
+                if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
-                    if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
-                    {
-                        ConsoleColor old2 = currentColor;
-                        currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color), _config.ColorFormatting != StackColorFormatType.ANSIColorNoBright) : (ConsoleColor)(GetColor(span.Color) - 1);
-                        if (old2 != currentColor)
-                            Console.ForegroundColor = currentColor;
-                    }
-
-                    if (span.Text != null)
-                        Console.Write(span.Text);
-                    else
-                        Console.Write(span.Char);
+                    ConsoleColor old2 = currentColor;
+                    currentColor = _isArgbColor ? Color4Config.ToConsoleColor(GetColor(span.Color), _config.ColorFormatting != StackColorFormatType.ANSIColorNoBright) : (ConsoleColor)(GetColor(span.Color) - 1);
+                    if (old2 != currentColor)
+                        Console.ForegroundColor = currentColor;
                 }
-                if (_config.ColorFormatting != StackColorFormatType.None)
-                    Console.ForegroundColor = old;
-                Console.WriteLine();
+
+                if (span.Text != null)
+                    Console.Write(span.Text);
+                else
+                    Console.Write(span.Char);
             }
+            if (_config.ColorFormatting != StackColorFormatType.None)
+                Console.ForegroundColor = old;
+            Console.WriteLine();
         }
         else if (!writeToConsoleBuffer) Console.WriteLine(GetString(exception));
         else
@@ -565,14 +495,6 @@ public class StackTraceCleaner
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
-        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
-        if (remoteTraces is { Length: > 0 })
-        {
-            for (int i = 0; i < remoteTraces.Length; ++i)
-            {
-                WriteToTextWriterIntl(remoteTraces[i], writer, false);
-            }
-        }
         WriteToTextWriterIntl(stackTrace, writer, true);
         writer.Flush();
     }
@@ -604,14 +526,6 @@ public class StackTraceCleaner
             throw new ArgumentNullException(nameof(exception));
 
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
-        StackTrace[]? remoteTraces = IsMono ? MonoCapturedTracesAccessor?.Invoke(exception) : null;
-        if (remoteTraces is { Length: > 0 })
-        {
-            for (int i = 0; i < remoteTraces.Length; ++i)
-            {
-                await WriteToTextWriterIntlAsync(remoteTraces[i], writer, false, token).ConfigureAwait(false);
-            }
-        }
         await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
@@ -1611,24 +1525,49 @@ public class StackTraceCleaner
     private static MethodInfo? TryGetMethod(Type compGenType)
     {
         // cache all registered state machines and their source methods in the type's assembly.
-        Type[] types = compGenType.Assembly.GetTypes();
+        Type?[] types;
+
+        try
+        {
+            types = compGenType.Assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException e)
+        {
+            types = e.Types;
+        }
+            
         MethodInfo? method = null;
         for (int i = 0; i < types.Length; ++i)
         {
-            MethodInfo[] methods = types[i].GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+            Type? type = types[i];
+            if (type == null)
+                continue;
+
+            MethodInfo[] methods = type.GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
             for (int j = 0; j < methods.Length; ++j)
             {
-                Attribute[] attrs = Attribute.GetCustomAttributes(methods[j]);
+                Attribute[] attrs;
+                try
+                {
+                    attrs = Attribute.GetCustomAttributes(methods[j]);
+                }
+                catch
+                {
+                    continue;
+                }
+
                 for (int d = 0; d < attrs.Length; ++d)
                 {
-                    if (attrs[d] is StateMachineAttribute attr)
-                    {
-                        if (!CompilerGeneratedStateMachineSourceCache.ContainsKey(attr.StateMachineType))
-                            CompilerGeneratedStateMachineSourceCache.Add(attr.StateMachineType, methods[j]);
-                        if (method is null && attr.StateMachineType == compGenType)
-                            method = methods[j];
-                        break;
-                    }
+                    if (attrs[d] is not StateMachineAttribute attr)
+                        continue;
+
+                    if (!CompilerGeneratedStateMachineSourceCache.ContainsKey(attr.StateMachineType))
+                        CompilerGeneratedStateMachineSourceCache.Add(attr.StateMachineType, methods[j]);
+
+                    if (method is null && attr.StateMachineType == compGenType)
+                        method = methods[j];
+
+                    break;
                 }
             }
         }
@@ -1752,8 +1691,8 @@ public class StackTraceCleaner
                 {
                     yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
                     yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
-                    yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.ExtraData);
                 }
+                yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.ExtraData);
 
                 if (assembly != null && _config.IncludeAssemblyData)
                 {
@@ -1924,22 +1863,15 @@ public class StackTraceCleaner
 
                     MethodInfo? originalMethod;
                     // get method from cache
-                    if (!IsMono)
+                    lock (CompilerGeneratedStateMachineSourceCache)
                     {
-                        lock (CompilerGeneratedStateMachineSourceCache)
+                        if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod))
                         {
-                            if (!CompilerGeneratedStateMachineSourceCache.TryGetValue(declType, out originalMethod))
-                            {
-                                originalMethod = TryGetMethod(declType);
-                                if (originalMethod == null)
-                                    // add null value to cache so we don't keep trying to fetch it.
-                                    CompilerGeneratedStateMachineSourceCache.Add(declType, null);
-                            }
+                            originalMethod = TryGetMethod(declType);
+                            if (originalMethod == null)
+                                // add null value to cache so we don't keep trying to fetch it.
+                                CompilerGeneratedStateMachineSourceCache.Add(declType, null);
                         }
-                    }
-                    else
-                    {
-                        originalMethod = null;
                     }
                     if (originalMethod != null)
                     {
@@ -1947,7 +1879,7 @@ public class StackTraceCleaner
                         if (info.DeclaringType != null)
                             declType = info.DeclaringType;
                     }
-                    else if (IsMono && declType.DeclaringType != null)
+                    else if (declType.DeclaringType != null)
                     {
                         // backup search for method on mono because it has issues with the cache method above, search by name first
                         string methodName = declType.Name;
@@ -2013,20 +1945,10 @@ public class StackTraceCleaner
                                             declType = info.DeclaringType;
                                     }
                                 }
-                                catch
+                                catch (AmbiguousMatchException)
                                 {
-                                    // throw only in debug build
-#if DEBUG
-                                        throw;
-#endif
+
                                 }
-                            }
-                            catch
-                            {
-                                // throw only in debug build
-#if DEBUG
-                                    throw;
-#endif
                             }
                         }
                     }

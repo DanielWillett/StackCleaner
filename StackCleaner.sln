@@ -5,6 +5,8 @@ VisualStudioVersion = 17.5.33103.201
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StackCleaner", "StackCleaner.csproj", "{D3E70618-9350-4A56-9636-A303A3D7B910}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StackCleaner.Tests", "StackCleaner.Tests\StackCleaner.Tests.csproj", "{A6B3D8D4-0510-4441-AFC8-886FC95113BC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{D3E70618-9350-4A56-9636-A303A3D7B910}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D3E70618-9350-4A56-9636-A303A3D7B910}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D3E70618-9350-4A56-9636-A303A3D7B910}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A6B3D8D4-0510-4441-AFC8-886FC95113BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A6B3D8D4-0510-4441-AFC8-886FC95113BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A6B3D8D4-0510-4441-AFC8-886FC95113BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A6B3D8D4-0510-4441-AFC8-886FC95113BC}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
