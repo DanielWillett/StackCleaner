@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
@@ -31,7 +32,7 @@ public class StackCleanerConfiguration : ICloneable
     private bool _includeILOffset;
     private bool _includeFileData;
     private StackColorFormatType _colorFormatting = StackColorFormatType.None;
-    private IReadOnlyCollection<Type> _hiddenTypes = StackTraceCleaner.DefaultHiddenTypes;
+    private ReadOnlyCollection<Type> _hiddenTypes = StackTraceCleaner.DefaultHiddenTypes;
 
     /// <summary>
     /// Default implementation of <see cref="StackCleanerConfiguration"/>.
@@ -279,7 +280,7 @@ public class StackCleanerConfiguration : ICloneable
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
             if (value == null)
-                value = Array.AsReadOnly(Array.Empty<Type>());
+                value = Array.AsReadOnly(Type.EmptyTypes);
             else if (!ReferenceEquals(value, StackTraceCleaner.DefaultHiddenTypes))
             {
                 if (value is Type[] arr)
@@ -292,7 +293,7 @@ public class StackCleanerConfiguration : ICloneable
                     value = Array.AsReadOnly(value.ToArray());
             }
 
-            _hiddenTypes = (IReadOnlyCollection<Type>)value;
+            _hiddenTypes = (ReadOnlyCollection<Type>)value;
         }
     }
 
@@ -315,8 +316,12 @@ public class StackCleanerConfiguration : ICloneable
         _includeAssemblyData = _includeAssemblyData
     };
 
-    /// <returns>A readonly array representing the current hidden types. May equal <see cref="StackTraceCleaner.DefaultHiddenTypes"/> </returns>
+    /// <returns>A readonly array representing the current hidden types. May equal <see cref="StackTraceCleaner.DefaultHiddenTypes"/>.</returns>
+#if !NETFRAMEWORK || NET45_OR_GREATER
     public IReadOnlyCollection<Type> GetHiddenTypes() => _hiddenTypes;
+#else
+    public ReadOnlyCollection<Type> GetHiddenTypes() => _hiddenTypes;
+#endif
 }
 
 /// <summary>
@@ -382,6 +387,7 @@ public abstract class ColorConfig
     private int _keywordColor;
     private int _methodColor;
     private int _propertyColor;
+    private int _eventColor;
     private int _parameterColor;
     private int _classColor;
     private int _structColor;
@@ -449,6 +455,21 @@ public abstract class ColorConfig
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
             _propertyColor = value;
+        }
+    }
+
+    /// <summary>
+    /// Color of event names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public virtual int EventColor
+    {
+        get => _eventColor;
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            _eventColor = value;
         }
     }
 
@@ -722,6 +743,21 @@ public sealed class Color4Config : ColorConfig
     }
 
     /// <summary>
+    /// Color of event names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public new ConsoleColor EventColor
+    {
+        get => (ConsoleColor)(base.EventColor - 1);
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            base.EventColor = (int)value + 1;
+        }
+    }
+
+    /// <summary>
     /// Color of parameter names.
     /// </summary>
     /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
@@ -909,6 +945,7 @@ public sealed class Color4Config : ColorConfig
         KeywordColor = ConsoleColor.Blue;
         MethodColor = ConsoleColor.DarkYellow;
         PropertyColor = ConsoleColor.White;
+        EventColor = ConsoleColor.White;
         ParameterColor = ConsoleColor.Cyan;
         ClassColor = ConsoleColor.DarkGreen;
         StructColor = ConsoleColor.Green;
@@ -1001,6 +1038,21 @@ public sealed class Color32Config : ColorConfig
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
             base.PropertyColor = value.ToArgb();
+        }
+    }
+
+    /// <summary>
+    /// Color of event names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public new Color EventColor
+    {
+        get => Color.FromArgb(base.EventColor);
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            base.EventColor = value.ToArgb();
         }
     }
 
@@ -1192,6 +1244,7 @@ public sealed class Color32Config : ColorConfig
         KeywordColor = Color.FromArgb(255, 86, 156, 214);
         MethodColor = Color.FromArgb(255, 220, 220, 170);
         PropertyColor = Color.FromArgb(255, 220, 220, 220);
+        EventColor = Color.FromArgb(255, 220, 220, 220);
         ParameterColor = Color.FromArgb(255, 156, 220, 254);
         ClassColor = Color.FromArgb(255, 78, 201, 176);
         StructColor = Color.FromArgb(255, 134, 198, 145);

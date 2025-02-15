@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -9,7 +10,9 @@ using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text;
 using System.Threading;
+#if !NETFRAMEWORK || NET45_OR_GREATER
 using System.Threading.Tasks;
+#endif
 
 namespace StackCleaner;
 
@@ -58,6 +61,9 @@ public class StackTraceCleaner
     private const string StaticSymbol = "static";
     private const string SetterSymbol = "set";
     private const string GetterSymbol = "get";
+    private const string AdderSymbol = "add";
+    private const string RemoverSymbol = "remove";
+    private const string RaiserSymbol = "raise";
     private const string AsyncSymbol = "async";
     private const string EnumeratorSymbol = "enumerator";
     private const string UnityEndColorSymbol = "</color>";
@@ -124,20 +130,24 @@ public class StackTraceCleaner
     private static readonly Type TypeUInt64 = typeof(ulong);
     private static readonly Type TypeUInt16 = typeof(ushort);
     private static readonly Type TypeVoid = typeof(void);
-    private static readonly Type TypeNullableValueType = typeof(Nullable<>);
     private static readonly Type TypeCompilerGenerated = typeof(CompilerGeneratedAttribute);
     // private static readonly Type TypeStateMachineBase = typeof(StateMachineAttribute);
+
+#if !NETFRAMEWORK || NET45_OR_GREATER
     private static readonly Dictionary<Type, MethodInfo?> CompilerGeneratedStateMachineSourceCache = new Dictionary<Type, MethodInfo?>(64);
+#endif
 
     // types that are hidden by default. These are all the types used by the Task internal.
-    internal static readonly IReadOnlyCollection<Type> DefaultHiddenTypes = Array.AsReadOnly(new Type[]
+    internal static readonly ReadOnlyCollection<Type> DefaultHiddenTypes = Array.AsReadOnly(new Type[]
     {
         typeof(ExecutionContext),
+#if !NETFRAMEWORK || NET45_OR_GREATER
         typeof(TaskAwaiter),
         typeof(TaskAwaiter<>),
         typeof(ConfiguredTaskAwaitable.ConfiguredTaskAwaiter),
         typeof(ConfiguredTaskAwaitable<>.ConfiguredTaskAwaiter),
         typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo),
+#endif
     });
 
     private static StackTraceCleaner? _instance;
@@ -224,10 +234,17 @@ public class StackTraceCleaner
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        if (stackTrace.FrameCount <= 0)
+            return string.Empty;
+
         Encoding encoding = Encoding.Default;
         using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult * stackTrace.FrameCount));
         //stream.Position = 0;
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+#else
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
+#endif
         WriteToTextWriterIntl(stackTrace, writer, true);
         writer.Flush();
         byte[] bytes = stream.GetBuffer();
@@ -242,10 +259,17 @@ public class StackTraceCleaner
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
 
+        if (stackTrace.FrameCount <= 0)
+            return string.Empty;
+
         Encoding encoding = Encoding.Default;
         using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult * stackTrace.FrameCount));
         stream.Position = 0;
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+#else
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
+#endif
         WriteToTextWriterIntl(stackTrace, writer);
         writer.Flush();
         byte[] bytes = stream.GetBuffer();
@@ -267,9 +291,19 @@ public class StackTraceCleaner
         if (!stream.CanWrite)
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
 
+        if (stackTrace.FrameCount <= 0)
+            return;
+
         encoding ??= Encoding.Default;
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+#else
+        TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
+#endif
         WriteToTextWriterIntl(stackTrace, writer);
+#if NETFRAMEWORK && !NET45_OR_GREATER
+        writer.Flush();
+#endif
     }
     /// <summary>
     /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to <paramref name="stream"/> using <paramref name="encoding"/> to encode it.
@@ -288,7 +322,14 @@ public class StackTraceCleaner
 
         encoding ??= Encoding.Default;
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        if (stackTrace.FrameCount <= 0)
+            return;
+
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
+#else
+        TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
+#endif
         WriteToTextWriterIntl(stackTrace, writer, true);
         writer.Flush();
     }
@@ -311,6 +352,8 @@ public class StackTraceCleaner
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
 
+        if (stackTrace.FrameCount <= 0)
+            return;
 
         encoding ??= Encoding.Default;
         using FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, encoding.GetMaxByteCount(_defBufferSizeMult * stackTrace.FrameCount));
@@ -335,12 +378,16 @@ public class StackTraceCleaner
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
 
+        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        if (stackTrace.FrameCount <= 0)
+            return;
 
         encoding ??= Encoding.Default;
         using FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, encoding.GetMaxByteCount(_defBufferSizeMult * 8));
-        WriteToStream(stream, exception, encoding);
+        WriteToStream(stream, stackTrace, encoding);
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="stackTrace"/> and writes it to <paramref name="stream"/> asynchronously using <paramref name="encoding"/> to encode it.
     /// </summary>
@@ -355,12 +402,15 @@ public class StackTraceCleaner
             throw new ArgumentNullException(nameof(stackTrace));
         if (!stream.CanWrite)
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
+        if (stackTrace.FrameCount <= 0)
+            return;
 
         encoding ??= Encoding.UTF8;
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
         await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+
     /// <summary>
     /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to <paramref name="stream"/> asynchronously using <paramref name="encoding"/> to encode it.
     /// </summary>
@@ -378,10 +428,15 @@ public class StackTraceCleaner
 
         encoding ??= Encoding.UTF8;
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+
+        if (stackTrace.FrameCount <= 0)
+            return;
+
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
         await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+#endif
     
     /// <summary>
     /// Output the stack trace to <see cref="Console"/> using the appropriate color format.
@@ -393,6 +448,8 @@ public class StackTraceCleaner
     {
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
+        if (stackTrace.FrameCount <= 0)
+            return;
 
         if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
         {
@@ -440,6 +497,8 @@ public class StackTraceCleaner
         if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
         {
             StackTrace trace = new StackTrace(exception, _config.IncludeSourceData);
+            if (trace.FrameCount <= 0)
+                return;
             ConsoleColor currentColor = (ConsoleColor)255;
             ConsoleColor old = Console.ForegroundColor;
             foreach (SpanData span in EnumerateSpans(trace, true))
@@ -480,6 +539,8 @@ public class StackTraceCleaner
             throw new ArgumentNullException(nameof(writer));
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
+        if (stackTrace.FrameCount <= 0)
+            return;
 
         WriteToTextWriterIntl(stackTrace, writer);
         writer.Flush();
@@ -494,11 +555,17 @@ public class StackTraceCleaner
             throw new ArgumentNullException(nameof(writer));
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
+
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+
+        if (stackTrace.FrameCount <= 0)
+            return;
+
         WriteToTextWriterIntl(stackTrace, writer, true);
         writer.Flush();
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="stackTrace"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
@@ -510,10 +577,15 @@ public class StackTraceCleaner
         if (stackTrace == null)
             throw new ArgumentNullException(nameof(stackTrace));
 
+        if (stackTrace.FrameCount <= 0)
+            return;
+
         await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+#endif
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="exception"/>'s stack (and it's remote stacks when applicable) and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
@@ -526,9 +598,14 @@ public class StackTraceCleaner
             throw new ArgumentNullException(nameof(exception));
 
         StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+
+        if (stackTrace.FrameCount <= 0)
+            return;
+
         await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+#endif
 
     /// <summary>
     /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/>.
@@ -583,6 +660,7 @@ public class StackTraceCleaner
             writer.Write(Environment.NewLine);
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
@@ -644,6 +722,7 @@ public class StackTraceCleaner
         if (_writeNewline)
             await writer.WriteAsync(Environment.NewLine).ConfigureAwait(false);
     }
+#endif
 
     /// <summary>
     /// Formats the <paramref name="typedef"/> and returns it as a <see cref="string"/> using the runtime's default encoding.
@@ -657,7 +736,11 @@ public class StackTraceCleaner
         Encoding encoding = Encoding.Default;
         using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult));
         stream.Position = 0;
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+#else
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult);
+#endif
         WriteToTextWriterIntl(typedef, writer);
         writer.Flush();
         byte[] bytes = stream.GetBuffer();
@@ -680,8 +763,15 @@ public class StackTraceCleaner
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
 
         encoding ??= Encoding.Default;
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+#else
+        TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult);
+#endif
         WriteToTextWriterIntl(typedef, writer);
+#if NETFRAMEWORK && !NET45_OR_GREATER
+        writer.Flush();
+#endif
     }
 
     /// <summary>
@@ -708,6 +798,7 @@ public class StackTraceCleaner
         WriteToStream(stream, typedef, encoding);
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="typedef"/> and writes it to <paramref name="stream"/> asynchronously using <paramref name="encoding"/> to encode it.
     /// </summary>
@@ -728,6 +819,7 @@ public class StackTraceCleaner
         await WriteToTextWriterIntlAsync(typedef, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+#endif
 
     /// <summary>
     /// Output the type definition to <see cref="Console"/> using the appropriate color format.
@@ -788,6 +880,7 @@ public class StackTraceCleaner
         writer.Flush();
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="typedef"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
@@ -802,6 +895,7 @@ public class StackTraceCleaner
         await WriteToTextWriterIntlAsync(typedef, writer, true, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+#endif
 
     /// <summary>
     /// Formats the <paramref name="typedef"/> and writes it to <paramref name="writer"/>.
@@ -852,6 +946,7 @@ public class StackTraceCleaner
             writer.Write(GetANSIResetString());
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="typedef"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
@@ -909,6 +1004,7 @@ public class StackTraceCleaner
             await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
     }
+#endif
 
     /// <summary>
     /// Formats the <paramref name="method"/> and returns it as a <see cref="string"/> using the runtime's default encoding.
@@ -922,7 +1018,11 @@ public class StackTraceCleaner
         Encoding encoding = Encoding.Default;
         using MemoryStream stream = new MemoryStream(encoding.GetMaxByteCount(_defBufferSizeMult));
         stream.Position = 0;
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+#else
+        using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult);
+#endif
         WriteToTextWriterIntl(method, writer);
         writer.Flush();
         byte[] bytes = stream.GetBuffer();
@@ -945,8 +1045,15 @@ public class StackTraceCleaner
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
 
         encoding ??= Encoding.Default;
+#if !NETFRAMEWORK || NET45_OR_GREATER
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult, true);
+#else
+        TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult);
+#endif
         WriteToTextWriterIntl(method, writer);
+#if NETFRAMEWORK && !NET45_OR_GREATER
+        writer.Flush();
+#endif
     }
 
     /// <summary>
@@ -973,6 +1080,7 @@ public class StackTraceCleaner
         WriteToStream(stream, method, encoding);
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="method"/> and writes it to <paramref name="stream"/> asynchronously using <paramref name="encoding"/> to encode it.
     /// </summary>
@@ -993,6 +1101,7 @@ public class StackTraceCleaner
         await WriteToTextWriterIntlAsync(method, writer, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+#endif
 
     /// <summary>
     /// Output the method definition to <see cref="Console"/> using the appropriate color format.
@@ -1052,6 +1161,7 @@ public class StackTraceCleaner
         writer.Flush();
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
@@ -1066,6 +1176,7 @@ public class StackTraceCleaner
         await WriteToTextWriterIntlAsync(method, writer, token).ConfigureAwait(false);
         await writer.FlushAsync().ConfigureAwait(false);
     }
+#endif
 
     /// <summary>
     /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/>.
@@ -1116,6 +1227,7 @@ public class StackTraceCleaner
             writer.Write(GetANSIResetString());
     }
 
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Formats the <paramref name="method"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
@@ -1169,10 +1281,11 @@ public class StackTraceCleaner
             writer.Write(OuterEndHtmlTagSymbol);
 
         // reset console color
-        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ExtendedANSIColor)
+        if (_config.ColorFormatting is StackColorFormatType.ANSIColor or StackColorFormatType.ExtendedANSIColor or StackColorFormatType.ANSIColorNoBright)
             await writer.WriteAsync(GetANSIResetString()).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
     }
+#endif
 
     /// <summary>
     /// Converts a 'primitive' type to it's corresponding keyword (void, int, string, etc.)
@@ -1226,7 +1339,6 @@ public class StackTraceCleaner
     /// <summary>
     /// Get what token color a type name's span should be.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static TokenType GetTypeColor(Type type) => type.IsGenericParameter ? TokenType.GenericParameter : (type.IsInterface ? TokenType.Interface : (type.IsValueType ? (type.IsEnum ? TokenType.Enum : TokenType.Struct) : TokenType.Class));
     
     /// <summary>
@@ -1514,7 +1626,7 @@ public class StackTraceCleaner
         StackColorFormatType.Html => HtmlEndSpanSymbol,
         _ => string.Empty
     };
-
+#if !NETFRAMEWORK || NET45_OR_GREATER
     /// <summary>
     /// Caches the associations between compiler-generated classes and their source methods of the
     /// entire assembly that <paramref name="compGenType"/> is from, then returns the associated method for <paramref name="compGenType"/>.
@@ -1546,35 +1658,21 @@ public class StackTraceCleaner
             MethodInfo[] methods = type.GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
             for (int j = 0; j < methods.Length; ++j)
             {
-                Attribute[] attrs;
-                try
-                {
-                    attrs = Attribute.GetCustomAttributes(methods[j]);
-                }
-                catch
-                {
+                StateMachineAttribute? attr = (StateMachineAttribute)Attribute.GetCustomAttribute(methods[j], typeof(StateMachineAttribute));
+                if (attr == null)
                     continue;
-                }
 
-                for (int d = 0; d < attrs.Length; ++d)
-                {
-                    if (attrs[d] is not StateMachineAttribute attr)
-                        continue;
+                if (!CompilerGeneratedStateMachineSourceCache.ContainsKey(attr.StateMachineType))
+                    CompilerGeneratedStateMachineSourceCache.Add(attr.StateMachineType, methods[j]);
 
-                    if (!CompilerGeneratedStateMachineSourceCache.ContainsKey(attr.StateMachineType))
-                        CompilerGeneratedStateMachineSourceCache.Add(attr.StateMachineType, methods[j]);
-
-                    if (method is null && attr.StateMachineType == compGenType)
-                        method = methods[j];
-
-                    break;
-                }
+                if (method is null && attr.StateMachineType == compGenType)
+                    method = methods[j];
             }
         }
 
         return method;
     }
-
+#endif
     /// <summary>
     /// Helper method to determine whether writing an end color tag is needed.
     /// </summary>
@@ -1730,6 +1828,7 @@ public class StackTraceCleaner
     {
         public MethodBase? InsertAfter { get; set; }
     }
+
     /// <summary>
     /// Enumerates through the spans in a type name declaration.
     /// </summary>
@@ -1781,9 +1880,9 @@ public class StackTraceCleaner
             bool generic = !type.IsGenericParameter && (type.IsGenericType || type.IsGenericTypeDefinition);
 
             // check for Nullable<T> (nullable value type) and display it with a question mark (int?).
-            if (generic && type.IsGenericType && type.GetGenericTypeDefinition() == TypeNullableValueType)
+            if (generic && Nullable.GetUnderlyingType(type) is { } nullable)
             {
-                foreach (SpanData d in EnumerateTypeName(type.GenericTypeArguments[0]))
+                foreach (SpanData d in EnumerateTypeName(nullable))
                     yield return d;
                 yield return new SpanData(NullableSymbol, TokenType.Punctuation);
                 yield break;
@@ -1828,10 +1927,12 @@ public class StackTraceCleaner
                 yield return new SpanData(type.Name, GetTypeColor(type));
         }
     }
+
     private IEnumerable<SpanData> EnumerateMethod(MethodBase info, MethodInfoContainer? container)
     {
         redo:
-        bool isPropAccessor = false;
+        int propAccessor = 0;
+        int eventAccessor = 0;
         Type? declType = info.DeclaringType;
         bool async = false;
         bool enumerator = false;
@@ -1844,24 +1945,33 @@ public class StackTraceCleaner
             {
                 if (Attribute.IsDefined(declType, TypeCompilerGenerated))
                 {
+                    Type[]? interfaces = null;
+#if !NETFRAMEWORK || NET45_OR_GREATER
                     // test for various compiler-generated state machines
                     if (typeof(IAsyncStateMachine).IsAssignableFrom(declType))
                     {
                         async = true;
                     }
+#else
+                    if ((interfaces = declType.GetInterfaces()).Any(x => x.IsInterface && string.Equals(x.FullName, "System.Runtime.CompilerServices.IAsyncStateMachine")))
+                    {
+                        async = true;
+                    }
+#endif
                     else if (typeof(IEnumerator).IsAssignableFrom(declType))
                     {
                         enumerator = true;
                     }
                     // external reference required for a typeof operation, string comparison works okay
-                    else if (declType.GetInterfaces().Any(x => x.IsGenericType && x.Name.StartsWith("IAsyncEnumerator", StringComparison.Ordinal)))
+                    else if ((interfaces ??= declType.GetInterfaces()).Any(x => x.IsInterface && x.IsGenericType && x.Name.StartsWith("IAsyncEnumerator", StringComparison.Ordinal)))
                     {
                         async = true;
                         enumerator = true;
                     }
                     else goto next2;
 
-                    MethodInfo? originalMethod;
+                    MethodInfo? originalMethod = null;
+#if !NETFRAMEWORK || NET45_OR_GREATER
                     // get method from cache
                     lock (CompilerGeneratedStateMachineSourceCache)
                     {
@@ -1873,6 +1983,7 @@ public class StackTraceCleaner
                                 CompilerGeneratedStateMachineSourceCache.Add(declType, null);
                         }
                     }
+#endif
                     if (originalMethod != null)
                     {
                         info = originalMethod;
@@ -1997,29 +2108,137 @@ public class StackTraceCleaner
             if (enumerator) // enumerator 'keyword'
                 yield return new SpanData(EnumeratorSymbol + SpaceSymbolStr, TokenType.Keyword);
 
-            if (info.IsSpecialName && info.Name != null)
+            MethodInfo? explicitInterfaceMethod = null;
+            if (declType != null)
             {
-                // Check if the method is a property accessor.
-                // This is the fastest way (compared to looping through all properties in the current class and comparing their accessor methods).
-                if (info.Name.StartsWith("get_", StringComparison.Ordinal))
+                if (method2 is { IsStatic: false } && method2.Name.IndexOf('.') >= 0)
                 {
-                    isPropAccessor = true;
-                    yield return new SpanData(GetterSymbol + SpaceSymbolStr, TokenType.Keyword);
-                }
-                else if (info.Name.StartsWith("set_", StringComparison.Ordinal))
-                {
-                    isPropAccessor = true;
-                    yield return new SpanData(SetterSymbol + SpaceSymbolStr, TokenType.Keyword);
+                    Type[] interfaces = declType.GetInterfaces();
+
+                    MethodInfo? interfaceMethod = null;
+
+                    foreach (Type intx in interfaces.OrderByDescending(x => method2.Name.Contains(x.Name)))
+                    {
+                        InterfaceMapping mapping = declType.GetInterfaceMap(intx);
+                        for (int i = 0; i < mapping.InterfaceMethods.Length; ++i)
+                        {
+                            if (mapping.TargetMethods[i].Equals(method2))
+                            {
+                                interfaceMethod = mapping.InterfaceMethods[i];
+                                break;
+                            }
+                        }
+
+                        if (interfaceMethod != null)
+                            break;
+                    }
+
+                    if (interfaceMethod != null && !interfaceMethod.Name.Equals(method2.Name, StringComparison.Ordinal))
+                    {
+                        explicitInterfaceMethod = interfaceMethod;
+                    }
                 }
             }
 
-            // return type
-            if (method2 != null && method2.ReturnType != null)
+            string? name = info.Name;
+
+            if (explicitInterfaceMethod != null)
             {
-                foreach (SpanData d in EnumerateTypeName(method2.ReturnType))
-                    yield return d;
-                yield return new SpanData(SpaceSymbol, TokenType.Space);
+                name = explicitInterfaceMethod.Name;
             }
+
+            if (info.IsSpecialName && name != null)
+            {
+                // Check if the method is a property accessor.
+                // This is the fastest way (compared to looping through all properties in the current class and comparing their accessor methods).
+                if (name.StartsWith("get_", StringComparison.Ordinal))
+                {
+                    propAccessor = name.Equals("get_Item", StringComparison.Ordinal) ? 3 : 1;
+                }
+                else if (name.StartsWith("set_", StringComparison.Ordinal))
+                {
+                    propAccessor = name.Equals("set_Item", StringComparison.Ordinal) ? 4 : 2;
+                }
+                else if (name.StartsWith("add_", StringComparison.Ordinal))
+                {
+                    eventAccessor = 1;
+                }
+                else if (name.StartsWith("remove_", StringComparison.Ordinal))
+                {
+                    eventAccessor = 2;
+                }
+                else if (name.StartsWith("raise_", StringComparison.Ordinal))
+                {
+                    eventAccessor = 3;
+                }
+            }
+
+            // 'return' type
+            if (propAccessor != 2 && eventAccessor == 0)
+            {
+                if (method2 != null && method2.ReturnType != null)
+                {
+                    foreach (SpanData d in EnumerateTypeName(method2.ReturnType))
+                        yield return d;
+                    yield return new SpanData(SpaceSymbol, TokenType.Space);
+                }
+            }
+            else if (propAccessor == 2) // setter
+            {
+                ParameterInfo[] parameters;
+                if (method2 != null && (parameters = method2.GetParameters()).Length == 1)
+                {
+                    foreach (SpanData d in EnumerateTypeName(parameters[0].ParameterType))
+                        yield return d;
+                    yield return new SpanData(SpaceSymbol, TokenType.Space);
+                }
+            }
+            else if (eventAccessor is 1 or 2)
+            {
+                ParameterInfo[] parameters;
+                if (method2 != null && (parameters = method2.GetParameters()).Length == 1)
+                {
+                    foreach (SpanData d in EnumerateTypeName(parameters[0].ParameterType))
+                        yield return d;
+                    yield return new SpanData(SpaceSymbol, TokenType.Space);
+                }
+            }
+            else if (eventAccessor == 3 && name.Length > 6 && method2 != null)
+            {
+                BindingFlags fl = CopyBindingFlags(method2) | BindingFlags.DeclaredOnly;
+                EventInfo? @event = method2?.DeclaringType?.GetEvent(name.Substring(6), fl);
+                if (@event != null)
+                {
+                    foreach (SpanData d in EnumerateTypeName(@event.EventHandlerType))
+                        yield return d;
+                    yield return new SpanData(SpaceSymbol, TokenType.Space);
+                }
+            }
+
+
+            switch ((propAccessor - 1) % 2)
+            {
+                case 0:
+                    yield return new SpanData(GetterSymbol + SpaceSymbolStr, TokenType.Keyword);
+                    break;
+                case 1:
+                    yield return new SpanData(SetterSymbol + SpaceSymbolStr, TokenType.Keyword);
+                    break;
+            }
+
+            switch (eventAccessor)
+            {
+                case 1:
+                    yield return new SpanData(AdderSymbol + SpaceSymbolStr, TokenType.Keyword);
+                    break;
+                case 2:
+                    yield return new SpanData(RemoverSymbol + SpaceSymbolStr, TokenType.Keyword);
+                    break;
+                case 3:
+                    yield return new SpanData(RaiserSymbol + SpaceSymbolStr, TokenType.Keyword);
+                    break;
+            }
+
             bool dot = false;
             if (_config.IncludeNamespaces)
             {
@@ -2062,6 +2281,7 @@ public class StackTraceCleaner
                     else yield return new SpanData(ns, TokenType.Space);
                 }
             }
+
             if (declType != null)
             {
                 if (dot) // will be false for a global namespace
@@ -2069,20 +2289,42 @@ public class StackTraceCleaner
                 foreach (SpanData d in EnumerateTypeName(declType))
                     yield return d;
             }
+
             if (info is not ConstructorInfo) // constructors can not be generic and will not have a (useful) method name.
             {
                 // indexer
                 PropertyInfo? indexer = null;
-                if (isPropAccessor && info.Name is { Length: 8 } && info.Name.EndsWith("Item", StringComparison.Ordinal))
+
+                // Class.IDisposable.Dispose()
+                if (explicitInterfaceMethod != null)
+                {
+                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                    foreach (SpanData data in EnumerateTypeName(explicitInterfaceMethod.DeclaringType!))
+                    {
+                        yield return data;
+                    }
+                }
+
+                if (propAccessor is 3 or 4)
                 {
                     try
                     {
                         indexer = declType?.GetProperty("Item", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (declType != null && indexer == null && explicitInterfaceMethod != null)
+                        {
+                            BindingFlags fl = CopyBindingFlags(info) | BindingFlags.DeclaredOnly;
+                            PropertyInfo[] properties = declType.GetProperties(fl);
+                            indexer = properties.FirstOrDefault(propAccessor == 3
+                                ? x => info.Equals(x.GetGetMethod(true))
+                                : x => info.Equals(x.GetSetMethod(true))
+                            );
+                        }
                     }
                     catch
                     {
                         // ignored
                     }
+
                     if (indexer != null && indexer.GetIndexParameters() is { Length: > 0 } indexParams)
                     {
                         // is an indexer.
@@ -2115,11 +2357,31 @@ public class StackTraceCleaner
                     }
                     else indexer = null;
                 }
+
                 if (indexer == null)
                 {
-                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                    yield return new SpanData(!isPropAccessor || info.Name.Length < 5 ? info.Name : info.Name.Substring(4),
-                        isPropAccessor ? TokenType.Property : TokenType.Method);
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        int eventAccessorLength = eventAccessor switch
+                        {
+                            1 => 4,
+                            2 => 7,
+                            3 => 6,
+                            _ => 0
+                        };
+
+                        if (eventAccessorLength > 0 && name!.Length > eventAccessorLength)
+                        {
+                            name = name.Substring(eventAccessorLength);
+                        }
+                        else if (propAccessor > 0 && name!.Length > 4)
+                        {
+                            name = name.Substring(4);
+                        }
+
+                        yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                        yield return new SpanData(name!, propAccessor == 0 ? eventAccessor > 0 ? TokenType.Event : TokenType.Method : TokenType.Property);
+                    }
 
                     if (method2 != null &&
                         (method2.IsGenericMethod || method2.IsGenericMethodDefinition) &&
@@ -2159,7 +2421,7 @@ public class StackTraceCleaner
         }
 
         // property accessors will always have the same arguemnts, no need to display them.
-        if (!isPropAccessor)
+        if (propAccessor == 0 && eventAccessor == 0)
         {
             ParameterInfo[] parameters = info.GetParameters();
             if (parameters.Length > 0)
@@ -2206,6 +2468,23 @@ public class StackTraceCleaner
             }
         }
     }
+
+    private static BindingFlags CopyBindingFlags(MethodBase method)
+    {
+        BindingFlags fl = 0;
+        if (method.IsPublic)
+            fl |= BindingFlags.Public;
+        else
+            fl |= BindingFlags.NonPublic;
+
+        if (method.IsStatic)
+            fl |= BindingFlags.Static;
+        else
+            fl |= BindingFlags.Instance;
+
+        return fl;
+    }
+
     private IEnumerable<SpanData> EnumerateAssembly(Assembly assembly, bool newLine)
     {
         string? assemblyQualifiedName = assembly.FullName;
@@ -2283,6 +2562,7 @@ public class StackTraceCleaner
         Punctuation,
         ExtraData,
         LinesHiddenWarning,
-        EndTag
+        EndTag,
+        Event
     }
 }

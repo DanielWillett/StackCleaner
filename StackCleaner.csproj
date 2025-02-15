@@ -1,17 +1,25 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net461;netstandard2.1;netstandard2.0;net5.0</TargetFrameworks>
+
+	  <PackageReleaseNotes>
+		  Fixed a bug where an empty stack trace would cause an exception.
+		  Added formatting for event accessors and explicit implementations.
+		  Property type for properties now shows instead of the return type of the accessor (except for indexers).
+		  Added a target for net40 and net45 and removed unnecessary targets for net461, netstandard2.1, and net5.0, consolidating to netstandard2.0.
+	  </PackageReleaseNotes>
+
+		<TargetFrameworks>netstandard2.0;net45;net40</TargetFrameworks>
     <AssemblyTitle>StackCleaner</AssemblyTitle>
     <Product>StackCleaner</Product>
     <OutputPath>bin\$(Configuration)\</OutputPath>
     <Nullable>enable</Nullable>
-    <LangVersion>preview</LangVersion>
+    <LangVersion>13.0</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateDocumentationFile>True</GenerateDocumentationFile>
     <IncludeSymbols>True</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>1.4.3</Version>
+    <Version>1.5.0</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
@@ -23,9 +31,11 @@
     <PackageProjectUrl>https://github.com/DanielWillett/StackCleaner</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/DanielWillett/StackCleaner.git</RepositoryUrl>
-    <PackageTags>stack trace;debugging;error;logging;logger</PackageTags>
+    <PackageTags>stack trace;debugging;error;logging;logger;console</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <DebugType>portable</DebugType>
+
+	  <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 
   <PropertyGroup Condition="exists('C:\Users\danny\OneDrive\Documents\Strong Name Keys\DanielWillett.StackCleaner\DanielWillett.StackCleaner.snk')">
@@ -52,6 +62,19 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="$(SolutionDir)Promo/icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
+
+	<!-- Build Configurations -->
+	<PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+		<DebugType>full</DebugType>
+		<Optimize>false</Optimize>
+	</PropertyGroup>
+
+	<PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+		<DebugType>portable</DebugType>
+		<Optimize>true</Optimize>
+		<Deterministic>true</Deterministic>
+	</PropertyGroup>
 
 </Project>

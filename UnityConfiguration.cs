@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 namespace StackCleaner;
 
@@ -63,6 +63,21 @@ public sealed class UnityColor32Config : ColorConfig
             if (Frozen)
                 throw new NotSupportedException(FrozenErrorText);
             base.PropertyColor = ToArgb(value);
+        }
+    }
+
+    /// <summary>
+    /// Color of event names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>
+    public new Color EventColor
+    {
+        get => FromArgb(base.EventColor);
+        set
+        {
+            if (Frozen)
+                throw new NotSupportedException(FrozenErrorText);
+            base.EventColor = ToArgb(value);
         }
     }
 
@@ -254,6 +269,7 @@ public sealed class UnityColor32Config : ColorConfig
         KeywordColor = new Color32(86, 156, 214, 255);
         MethodColor = new Color32(220, 220, 170, 255);
         PropertyColor = new Color32(220, 220, 220, 255);
+        EventColor = new Color32(220, 220, 220, 255);
         ParameterColor = new Color32(156, 220, 254, 255);
         ClassColor = new Color32(78, 201, 176, 255);
         StructColor = new Color32(134, 198, 145, 255);
