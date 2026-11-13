@@ -29,6 +29,13 @@ namespace StackCleaner;
 /// </summary>
 public class StackTraceCleaner
 {
+    private const MethodImplAttributes MethodImplAttributes_Async =
+#if !NET10_0_OR_GREATER
+        (MethodImplAttributes)0x2000;
+#else
+        MethodImplAttributes.Async;
+#endif
+
     private const char ConsoleEscapeCharacter = '\u001b';
     private const char PointerSymbol = '*';
     private const char MemberSeparatorSymbol = '.';
@@ -138,17 +145,58 @@ public class StackTraceCleaner
 #endif
 
     // types that are hidden by default. These are all the types used by the Task internal.
-    internal static readonly ReadOnlyCollection<Type> DefaultHiddenTypes = Array.AsReadOnly(new Type[]
+    internal static readonly ReadOnlyCollection<Type> DefaultHiddenTypes;
+
+    static StackTraceCleaner()
     {
-        typeof(ExecutionContext),
-#if !NETFRAMEWORK || NET45_OR_GREATER
-        typeof(TaskAwaiter),
-        typeof(TaskAwaiter<>),
-        typeof(ConfiguredTaskAwaitable.ConfiguredTaskAwaiter),
-        typeof(ConfiguredTaskAwaitable<>.ConfiguredTaskAwaiter),
-        typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo),
+        List<Type> typeList = new List<Type>(16);
+#if NET10_0_OR_GREATER
+#pragma warning disable SYSLIB5007
+        Type asyncHelpers = typeof(AsyncHelpers);
+#pragma warning restore SYSLIB5007
+        typeList.Add(asyncHelpers);
+        foreach (Type type in asyncHelpers.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (type.IsClass)
+                typeList.Add(type);
+        }
+
+        Type? initHelpers = asyncHelpers.Assembly.GetType("System.Runtime.CompilerServices.InitHelpers");
+        if (initHelpers != null)
+            typeList.Add(initHelpers);
+
+#elif NETSTANDARD || NETCOREAPP || NET471_OR_GREATER
+        string version = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+        if (version.StartsWith(".NET ") && version.Length > 5 && char.IsDigit(version[5]) && Environment.Version.Major >= 10)
+        {
+            Type asyncHelpers = typeof(YieldAwaitable).Assembly.GetType("System.Runtime.CompilerServices.AsyncHelpers");
+            if (asyncHelpers != null)
+            {
+                typeList.Add(asyncHelpers);
+                foreach (Type type in asyncHelpers.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (type.IsClass)
+                        typeList.Add(type);
+                }
+                
+                Type? initHelpers = asyncHelpers.Assembly.GetType("System.Runtime.CompilerServices.InitHelpers");
+                if (initHelpers != null)
+                    typeList.Add(initHelpers);
+            }
+        }
 #endif
-    });
+
+        typeList.Add(typeof(ExecutionContext));
+#if !NETFRAMEWORK || NET45_OR_GREATER
+        typeList.Add(typeof(TaskAwaiter));
+        typeList.Add(typeof(TaskAwaiter<>));
+        typeList.Add(typeof(ConfiguredTaskAwaitable.ConfiguredTaskAwaiter));
+        typeList.Add(typeof(ConfiguredTaskAwaitable<>.ConfiguredTaskAwaiter));
+        typeList.Add(typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo));
+#endif
+
+        DefaultHiddenTypes = Array.AsReadOnly(typeList.ToArray());
+    }
 
     private static StackTraceCleaner? _instance;
     private readonly StackCleanerConfiguration _config;
@@ -233,7 +281,7 @@ public class StackTraceCleaner
     {
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
-        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        StackTrace stackTrace = new StackTrace(exception, _config.HasAnySourceData);
         if (stackTrace.FrameCount <= 0)
             return string.Empty;
 
@@ -245,7 +293,7 @@ public class StackTraceCleaner
 #else
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
 #endif
-        WriteToTextWriterIntl(stackTrace, writer, true);
+        WriteToTextWriterIntl(stackTrace, writer, exception, true);
         writer.Flush();
         byte[] bytes = stream.GetBuffer();
         return encoding.GetString(bytes, 0, (int)stream.Length);
@@ -270,7 +318,7 @@ public class StackTraceCleaner
 #else
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
 #endif
-        WriteToTextWriterIntl(stackTrace, writer);
+        WriteToTextWriterIntl(stackTrace, writer, null);
         writer.Flush();
         byte[] bytes = stream.GetBuffer();
         return encoding.GetString(bytes, 0, (int)stream.Length);
@@ -300,7 +348,7 @@ public class StackTraceCleaner
 #else
         TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
 #endif
-        WriteToTextWriterIntl(stackTrace, writer);
+        WriteToTextWriterIntl(stackTrace, writer, null);
 #if NETFRAMEWORK && !NET45_OR_GREATER
         writer.Flush();
 #endif
@@ -321,7 +369,7 @@ public class StackTraceCleaner
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
 
         encoding ??= Encoding.Default;
-        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        StackTrace stackTrace = new StackTrace(exception, _config.HasAnySourceData);
         if (stackTrace.FrameCount <= 0)
             return;
 
@@ -330,7 +378,7 @@ public class StackTraceCleaner
 #else
         TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount);
 #endif
-        WriteToTextWriterIntl(stackTrace, writer, true);
+        WriteToTextWriterIntl(stackTrace, writer, exception, true);
         writer.Flush();
     }
 
@@ -378,13 +426,9 @@ public class StackTraceCleaner
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
 
-        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
-        if (stackTrace.FrameCount <= 0)
-            return;
-
         encoding ??= Encoding.Default;
         using FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, encoding.GetMaxByteCount(_defBufferSizeMult * 8));
-        WriteToStream(stream, stackTrace, encoding);
+        WriteToStream(stream, exception, encoding);
     }
 
 #if !NETFRAMEWORK || NET45_OR_GREATER
@@ -407,8 +451,12 @@ public class StackTraceCleaner
 
         encoding ??= Encoding.UTF8;
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
-        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        await WriteToTextWriterIntlAsync(stackTrace, writer, null, true, token).ConfigureAwait(false);
+#if NET8_0_OR_GREATER
+        await writer.FlushAsync(token).ConfigureAwait(false);
+#else
         await writer.FlushAsync().ConfigureAwait(false);
+#endif
     }
 
     /// <summary>
@@ -427,17 +475,21 @@ public class StackTraceCleaner
             throw new ArgumentException("Stream must be able to write.", nameof(stream));
 
         encoding ??= Encoding.UTF8;
-        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        StackTrace stackTrace = new StackTrace(exception, _config.HasAnySourceData);
 
         if (stackTrace.FrameCount <= 0)
             return;
 
         using TextWriter writer = new StreamWriter(stream, encoding, _defBufferSizeMult * stackTrace.FrameCount, true);
-        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        await WriteToTextWriterIntlAsync(stackTrace, writer, exception, true, token).ConfigureAwait(false);
+#if NET8_0_OR_GREATER
+        await writer.FlushAsync(token).ConfigureAwait(false);
+#else
         await writer.FlushAsync().ConfigureAwait(false);
+#endif
     }
 #endif
-    
+
     /// <summary>
     /// Output the stack trace to <see cref="Console"/> using the appropriate color format.
     /// </summary>
@@ -455,7 +507,7 @@ public class StackTraceCleaner
         {
             ConsoleColor currentColor = (ConsoleColor)255;
             ConsoleColor old = Console.ForegroundColor;
-            foreach (SpanData span in EnumerateSpans(stackTrace, true))
+            foreach (SpanData span in EnumerateSpans(stackTrace, true, null))
             {
                 if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
@@ -478,7 +530,7 @@ public class StackTraceCleaner
         else
         {
             TextWriter cout = Console.Out;
-            WriteToTextWriterIntl(stackTrace, cout);
+            WriteToTextWriterIntl(stackTrace, cout, null);
             cout.Flush();
         }
     }
@@ -496,12 +548,12 @@ public class StackTraceCleaner
 
         if (_config.ColorFormatting is StackColorFormatType.ConsoleColor)
         {
-            StackTrace trace = new StackTrace(exception, _config.IncludeSourceData);
+            StackTrace trace = new StackTrace(exception, _config.HasAnySourceData);
             if (trace.FrameCount <= 0)
                 return;
             ConsoleColor currentColor = (ConsoleColor)255;
             ConsoleColor old = Console.ForegroundColor;
-            foreach (SpanData span in EnumerateSpans(trace, true))
+            foreach (SpanData span in EnumerateSpans(trace, true, exception))
             {
                 if (_config.ColorFormatting != StackColorFormatType.None && span.Color != TokenType.Space)
                 {
@@ -542,7 +594,7 @@ public class StackTraceCleaner
         if (stackTrace.FrameCount <= 0)
             return;
 
-        WriteToTextWriterIntl(stackTrace, writer);
+        WriteToTextWriterIntl(stackTrace, writer, null);
         writer.Flush();
     }
     /// <summary>
@@ -556,12 +608,12 @@ public class StackTraceCleaner
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
 
-        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        StackTrace stackTrace = new StackTrace(exception, _config.HasAnySourceData);
 
         if (stackTrace.FrameCount <= 0)
             return;
 
-        WriteToTextWriterIntl(stackTrace, writer, true);
+        WriteToTextWriterIntl(stackTrace, writer, exception, true);
         writer.Flush();
     }
 
@@ -579,9 +631,13 @@ public class StackTraceCleaner
 
         if (stackTrace.FrameCount <= 0)
             return;
-
-        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        
+        await WriteToTextWriterIntlAsync(stackTrace, writer, null, true, token).ConfigureAwait(false);
+#if NET8_0_OR_GREATER
+        await writer.FlushAsync(token).ConfigureAwait(false);
+#else
         await writer.FlushAsync().ConfigureAwait(false);
+#endif
     }
 #endif
 
@@ -597,24 +653,28 @@ public class StackTraceCleaner
         if (exception == null)
             throw new ArgumentNullException(nameof(exception));
 
-        StackTrace stackTrace = new StackTrace(exception, _config.IncludeSourceData);
+        StackTrace stackTrace = new StackTrace(exception, _config.HasAnySourceData);
 
         if (stackTrace.FrameCount <= 0)
             return;
 
-        await WriteToTextWriterIntlAsync(stackTrace, writer, true, token).ConfigureAwait(false);
+        await WriteToTextWriterIntlAsync(stackTrace, writer, exception, true, token).ConfigureAwait(false);
+#if NET8_0_OR_GREATER
+        await writer.FlushAsync(token).ConfigureAwait(false);
+#else
         await writer.FlushAsync().ConfigureAwait(false);
+#endif
     }
 #endif
 
     /// <summary>
     /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/>.
     /// </summary>
-    private void WriteToTextWriterIntl(StackTrace trace, TextWriter writer, bool warnIfApplicable = true)
+    private void WriteToTextWriterIntl(StackTrace trace, TextWriter writer, Exception? exception, bool warnIfApplicable = true)
     {
         TokenType currentColor = (TokenType)255;
         bool div = false;
-        foreach (SpanData span in EnumerateSpans(trace, warnIfApplicable))
+        foreach (SpanData span in EnumerateSpans(trace, warnIfApplicable, exception))
         {
             if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
             {
@@ -664,12 +724,12 @@ public class StackTraceCleaner
     /// <summary>
     /// Formats the <paramref name="trace"/> and writes it to <paramref name="writer"/> asynchronously.
     /// </summary>
-    private async Task WriteToTextWriterIntlAsync(StackTrace trace, TextWriter writer, bool warnIfApplicable = true, CancellationToken token = default)
+    private async Task WriteToTextWriterIntlAsync(StackTrace trace, TextWriter writer, Exception? exception, bool warnIfApplicable = true, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         TokenType currentColor = (TokenType)255;
         bool div = false;
-        foreach (SpanData span in EnumerateSpans(trace, warnIfApplicable))
+        foreach (SpanData span in EnumerateSpans(trace, warnIfApplicable, exception))
         {
             if (!div && _writeParaTags && _config.HtmlWriteOuterDiv)
             {
@@ -1683,11 +1743,102 @@ public class StackTraceCleaner
     /// <summary>
     /// Enumerates through the spans in a <see cref="StackTrace"/>.
     /// </summary>
-    private IEnumerable<SpanData> EnumerateSpans(StackTrace trace, bool warnIfApplicable)
+    private IEnumerable<SpanData> EnumerateSpans(StackTrace trace, bool warnIfApplicable, Exception? exception)
     {
         if (trace.GetFrames() is not { Length: > 0 } frames)
             yield break;
+
         bool hasSentOne = false;
+
+        // append the static constructor to the top if necessary for TypeInitializationExceptions
+        if (exception is TypeInitializationException { TypeName: { } typeName })
+        {
+            Type? failingType = null;
+            for (int i = 0; i < frames.Length; ++i)
+            {
+                Assembly? asm = frames[i].GetMethod()?.DeclaringType?.Assembly;
+                if (asm == null)
+                    continue;
+
+                try
+                {
+                    failingType = asm.GetType(typeName, false, false);
+                    if (failingType != null)
+                        break;
+                }
+                catch
+                {
+                    continue;
+                }
+            }
+
+            string? ns;
+            string name;
+            bool isStruct;
+            if (failingType != null)
+            {
+                isStruct = failingType.IsValueType;
+                ns = failingType.Namespace;
+                name = failingType.Name;
+            }
+            else
+            {
+                isStruct = false;
+                int lastDot = typeName.LastIndexOf('.');
+                if (lastDot >= 0)
+                {
+                    name = typeName.Substring(lastDot + 1);
+                    ns = typeName.Substring(0, lastDot);
+                }
+                else
+                {
+                    name = typeName;
+                    ns = null;
+                }
+            }
+
+
+            if (_writeNewline)
+            {
+                yield return new SpanData(AtPrefixSymbol, TokenType.FlowKeyword);
+            }
+            else if (_writeParaTags)
+            {
+                yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
+                yield return new SpanData(AtPrefixSymbol, TokenType.FlowKeyword);
+            }
+
+            yield return new SpanData(StaticSymbol + SpaceSymbolStr, TokenType.Keyword);
+            bool dot = false;
+            if (_config.IncludeNamespaces)
+            {
+                if (string.IsNullOrEmpty(ns))
+                {
+                    // global namespace
+                    yield return new SpanData(GlobalSymbol, TokenType.Keyword);
+                    yield return new SpanData(GlobalSeparatorSymbol, TokenType.Punctuation);
+                }
+                else
+                {
+                    dot = true;
+                    foreach (SpanData data in EnumerateNamespace(ns))
+                    {
+                        yield return data;
+                    }
+                }
+            }
+
+            if (dot)
+            {
+                yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+            }
+
+            yield return new SpanData(name, isStruct ? TokenType.Struct : TokenType.Class);
+            yield return new SpanData(ParametersOpenSymbol, TokenType.Punctuation);
+            yield return new SpanData(ParametersCloseSymbol, TokenType.Punctuation);
+            hasSentOne = true;
+        }
+
         bool hasHidden = false;
         for (int f = 0; f < frames.Length; ++f)
         {
@@ -1745,7 +1896,7 @@ public class StackTraceCleaner
 
             string ed = string.Empty;
             // source data (line, column number, IL offset, file)
-            if (_config.IncludeSourceData && frame != null)
+            if (_config.HasAnySourceData && frame != null)
             {
                 // line and column data
                 if (_config.IncludeLineData)
@@ -1790,7 +1941,10 @@ public class StackTraceCleaner
                     yield return new SpanData(EndParaTagSymbol, TokenType.EndTag);
                     yield return new SpanData(StartParaTagSymbol, TokenType.EndTag);
                 }
-                yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.ExtraData);
+                if (ed.Length > 0)
+                {
+                    yield return new SpanData((!_config.PutSourceDataOnNewLine || _writeParaTags || !_writeNewline ? string.Empty : Environment.NewLine) + ed, TokenType.ExtraData);
+                }
 
                 if (assembly != null && _config.IncludeAssemblyData)
                 {
@@ -1843,6 +1997,14 @@ public class StackTraceCleaner
             yield return new SpanData(NullSymbol, TokenType.Keyword);
             yield break;
         }
+
+        // used to represent reference types in .NET generics
+        if (string.Equals(type.FullName, "System.__Canon", StringComparison.Ordinal))
+        {
+            yield return new SpanData("?", TokenType.Punctuation);
+            yield break;
+        }
+
         if (_config.UseTypeAliases && GetKeyword(type) is { } rtnName)
         {
             // get type alias (void, int, string, etc)
@@ -1889,7 +2051,7 @@ public class StackTraceCleaner
             }
 
             // enumerate nested type (will also recursively work on multi-nested types)
-            if (!type.IsGenericParameter && type.IsNested && type.DeclaringType is { } decl)
+            if (!type.IsGenericParameter && type.DeclaringType is { } decl)
             {
                 foreach (SpanData d in EnumerateTypeName(decl))
                     yield return d;
@@ -1907,12 +2069,13 @@ public class StackTraceCleaner
 
                 // generic arguments
                 Type[] gens = type.GetGenericArguments();
-                if (gens.Length > 0)
+                int parentTypes = type.DeclaringType?.GetGenericArguments().Length ?? 0;
+                if (gens.Length > parentTypes)
                 {
                     yield return new SpanData(GenericOpenSymbol, TokenType.Punctuation);
-                    for (int i = 0; i < gens.Length; i++)
+                    for (int i = parentTypes; i < gens.Length; i++)
                     {
-                        if (i != 0)
+                        if (i != parentTypes)
                         {
                             yield return new SpanData(ListSeparatorSymbol, TokenType.Punctuation);
                         }
@@ -1963,7 +2126,12 @@ public class StackTraceCleaner
                         enumerator = true;
                     }
                     // external reference required for a typeof operation, string comparison works okay
-                    else if ((interfaces ??= declType.GetInterfaces()).Any(x => x.IsInterface && x.IsGenericType && x.Name.StartsWith("IAsyncEnumerator", StringComparison.Ordinal)))
+                    else if ((interfaces ??= declType.GetInterfaces()).Any(
+                        x => x.IsInterface
+                          && x.IsGenericType
+                          && x.FullName != null
+                          && x.FullName.StartsWith("System.Collections.Generic.IAsyncEnumerator", StringComparison.Ordinal)
+                    ))
                     {
                         async = true;
                         enumerator = true;
@@ -2094,7 +2262,13 @@ public class StackTraceCleaner
             {
                 anonFunc = true;
             }
+            // runtime-async method
+            else if ((info.GetMethodImplementationFlags() & MethodImplAttributes_Async) == MethodImplAttributes_Async)
+            {
+                async = true;
+            }
         }
+
         // constructors will be null here
         MethodInfo? method2 = info as MethodInfo;
         if (!anonFunc)
@@ -2203,13 +2377,13 @@ public class StackTraceCleaner
                     yield return new SpanData(SpaceSymbol, TokenType.Space);
                 }
             }
-            else if (eventAccessor == 3 && name.Length > 6 && method2 != null)
+            else if (eventAccessor == 3 && name!.Length > 6 && method2 != null)
             {
                 BindingFlags fl = CopyBindingFlags(method2) | BindingFlags.DeclaredOnly;
                 EventInfo? @event = method2?.DeclaringType?.GetEvent(name.Substring(6), fl);
                 if (@event != null)
                 {
-                    foreach (SpanData d in EnumerateTypeName(@event.EventHandlerType))
+                    foreach (SpanData d in EnumerateTypeName(@event.EventHandlerType!))
                         yield return d;
                     yield return new SpanData(SpaceSymbol, TokenType.Space);
                 }
@@ -2252,33 +2426,10 @@ public class StackTraceCleaner
                 else
                 {
                     dot = true;
-                    if (_config.ColorFormatting != StackColorFormatType.None)
+                    foreach (SpanData data in EnumerateNamespace(ns))
                     {
-                        // split namespace and add in color formatting where needed
-                        int index = -1;
-                        int lastIndex = -1;
-                        while (true)
-                        {
-                            index = ns.IndexOf(MemberSeparatorSymbol, index + 1);
-                            if (index == -1) break;
-                            if (lastIndex > 0)
-                            {
-                                yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                            }
-                            if (index >= ns.Length - 1) break;
-                            yield return new SpanData(ns.Substring(lastIndex + 1, index - lastIndex - 1), TokenType.Namespace);
-                            lastIndex = index;
-                        }
-
-                        if (lastIndex < ns.Length - 1)
-                        {
-                            if (lastIndex > 0)
-                                yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
-                            yield return new SpanData(ns.Substring(lastIndex + 1, ns.Length - lastIndex - 1), TokenType.Namespace);
-                        }
+                        yield return data;
                     }
-                    // send whole namespace at once since splitting isn't needed
-                    else yield return new SpanData(ns, TokenType.Space);
                 }
             }
 
@@ -2467,6 +2618,37 @@ public class StackTraceCleaner
                 goto redo;
             }
         }
+    }
+
+    private IEnumerable<SpanData> EnumerateNamespace(string ns)
+    {
+        if (_config.ColorFormatting != StackColorFormatType.None)
+        {
+            // split namespace and add in color formatting where needed
+            int index = -1;
+            int lastIndex = -1;
+            while (true)
+            {
+                index = ns.IndexOf(MemberSeparatorSymbol, index + 1);
+                if (index == -1) break;
+                if (lastIndex > 0)
+                {
+                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                }
+                if (index >= ns.Length - 1) break;
+                yield return new SpanData(ns.Substring(lastIndex + 1, index - lastIndex - 1), TokenType.Namespace);
+                lastIndex = index;
+            }
+
+            if (lastIndex < ns.Length - 1)
+            {
+                if (lastIndex > 0)
+                    yield return new SpanData(MemberSeparatorSymbol, TokenType.Punctuation);
+                yield return new SpanData(ns.Substring(lastIndex + 1, ns.Length - lastIndex - 1), TokenType.Namespace);
+            }
+        }
+        // send whole namespace at once since splitting isn't needed
+        else yield return new SpanData(ns, TokenType.Namespace);
     }
 
     private static BindingFlags CopyBindingFlags(MethodBase method)

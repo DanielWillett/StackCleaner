@@ -118,6 +118,8 @@ public class StackCleanerConfiguration : ICloneable
         }
     }
 
+    internal bool HasAnySourceData => _includeSourceData && (_includeILOffset || _includeLineData || _includeFileData || _includeAssemblyData);
+
     /// <summary>
     /// Namespaces are included in the method declaration.
     /// </summary>
@@ -263,12 +265,14 @@ public class StackCleanerConfiguration : ICloneable
     /// <summary>
     /// Override types who's methods will be skipped in stack traces.<br/>
     /// Default values:<br/><br/>
-    /// <see cref="ExecutionContext"/><br/>
-    /// <see cref="TaskAwaiter"/><br/>
-    /// <see cref="TaskAwaiter{TResult}"/><br/>
-    /// <see cref="ConfiguredTaskAwaitable.ConfiguredTaskAwaiter"/><br/>
-    /// <see cref="ConfiguredTaskAwaitable{TResult}.ConfiguredTaskAwaiter"/><br/>
-    /// <see cref="ExceptionDispatchInfo"/><br/>
+    /// <see cref="T:System.Threading.ExecutionContext"/><br/>
+    /// <see cref="T:System.Runtime.CompilerServices.TaskAwaiter"/><br/>
+    /// <see cref="T:System.Runtime.CompilerServices.TaskAwaiter`1"/><br/>
+    /// <see cref="T:System.Runtime.CompilerServices.ConfiguredTaskAwaitable.ConfiguredTaskAwaiter"/><br/>
+    /// <see cref="T:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaiter"/><br/>
+    /// <see cref="T:System.Runtime.ExceptionServices.ExceptionDispatchInfo"/><br/>
+    /// <see cref="T:System.Runtime.CompilerServices.AsyncHelpers"/> (and nested classes)<br/>
+    /// <see cref="T:System.Runtime.CompilerServices.InitHelpers"/><br/>
     /// Use <see cref="GetHiddenTypes"/> to <see langword="get"/> the value.
     /// </summary>
     /// <exception cref="NotSupportedException">Object is frozen (has been given to a <see cref="StackTraceCleaner"/>).</exception>

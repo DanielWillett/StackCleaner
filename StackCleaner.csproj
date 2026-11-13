@@ -3,13 +3,16 @@
   <PropertyGroup>
 
 	  <PackageReleaseNotes>
-		  Fixed a bug where an empty stack trace would cause an exception.
-		  Added formatting for event accessors and explicit implementations.
-		  Property type for properties now shows instead of the return type of the accessor (except for indexers).
-		  Added a target for net40 and net45 and removed unnecessary targets for net461, netstandard2.1, and net5.0, consolidating to netstandard2.0.
-	  </PackageReleaseNotes>
+* Added support for async methods compiled with the runtime-async feature.
+* Added InitHelpers and AsyncHelpers to ignored types on .NET 10 and later.
+* Added a .NET 10 target.
+* System.__Canon is now shown as a '?'.
+* Fixed duplicated generic arguments on nested types.
+* Fixed empty line when no source data is available but source data is turned on.
+* TypeInitializationExceptions now append the static constructor to the top of the stack trace.
+    </PackageReleaseNotes>
 
-		<TargetFrameworks>netstandard2.0;net45;net40</TargetFrameworks>
+		<TargetFrameworks>netstandard2.0;net45;net40;net10.0</TargetFrameworks>
     <AssemblyTitle>StackCleaner</AssemblyTitle>
     <Product>StackCleaner</Product>
     <OutputPath>bin\$(Configuration)\</OutputPath>
@@ -19,7 +22,7 @@
     <GenerateDocumentationFile>True</GenerateDocumentationFile>
     <IncludeSymbols>True</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>1.5.1</Version>
+    <Version>1.6.0</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
@@ -27,7 +30,7 @@
     <Title>Stack Trace Cleaner</Title>
     <Company>Daniel Willett</Company>
     <Authors>Daniel Willett</Authors>
-    <Description>Stack trace formatter for dotnet written and formatted in C#.</Description>
+    <Description>Stack trace formatter for .NET written in C#. Formats stack frames in a more readable C#-inspired format and optionally adds color.</Description>
     <PackageProjectUrl>https://github.com/DanielWillett/StackCleaner</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/DanielWillett/StackCleaner.git</RepositoryUrl>
@@ -38,9 +41,9 @@
 	  <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 
-  <PropertyGroup Condition="exists('C:\Users\danny\OneDrive\Documents\Strong Name Keys\DanielWillett.StackCleaner\DanielWillett.StackCleaner.snk')">
+  <PropertyGroup Condition="exists('%OneDrive%\Documents\Strong Name Keys\DanielWillett.StackCleaner\DanielWillett.StackCleaner.snk')">
     <SignAssembly>True</SignAssembly>
-    <AssemblyOriginatorKeyFile>C:\Users\danny\OneDrive\Documents\Strong Name Keys\DanielWillett.StackCleaner\DanielWillett.StackCleaner.snk</AssemblyOriginatorKeyFile>
+    <AssemblyOriginatorKeyFile>%OneDrive%\Documents\Strong Name Keys\DanielWillett.StackCleaner\DanielWillett.StackCleaner.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
 
   <ItemGroup>
